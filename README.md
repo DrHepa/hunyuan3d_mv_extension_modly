@@ -71,17 +71,37 @@ cd C:\Users\modly\api
 then:
 '''
 npm install - (I WOULDNT KNOW WHY IT WOULDNT INSTALL AT THIS POINT SO DONT ASK)
+OR you could even be in the modly folder directly and run: 
+'''cmd /c launch.bat
+''' since it has that file in it. 
 
 
+Then you can:
+''cmd /c launch.bat'''
+again and it should start the backend and run :) and NO FASTAPI ISSUES! which is good because if you tried to do some of this more 'manually', you would likely run into that issue :P
 
-ONCE you have npm, you can use their commands :)
-do:
-'''
-npm run dev  (STILL IN API FOLDER! VERY IMPORTANT)
-'''
-GIV IT A MINE and the Modly app SHOULD start!
 
 *The above was to install Modly via github to Windows from what I know. Other installs, search it up. I do not have Mac, Linux, etc
+
+
+NOTE: If you happen to recieve a "Something went wrong", it might be from development files on the github BUT if it's related to python, its possible to fix on your end luckily. 
+IF its something about a "Bundled Python" because tehnically if a program uses python, it should ahve it with the files", Then we can find the path or create it. 
+The requirements should have taken care of that during download but try this: 
+go back into the powershell under the modly folder still (admin), and type:
+'''node scripts/download-python-embed.js
+'''
+Thats a file in the scripts folder that does the python stuff for us that they made :) Make sure to thank them because it includes the environment! 
+
+Youll see the folder populate if you are in there. 
+THEN, 
+
+
+
+
+
+
+
+
 
 
 THEN:::::::::::::::::
