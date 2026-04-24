@@ -24,6 +24,7 @@
       "output": "mesh",
       "hf_repo": "tencent/Hunyuan3D-2mv",
       "download_check": "hunyuan3d-dit-v2-mv/model.fp16.safetensors",
+      "generator_class": "Hunyuan3D2mvTurboGenerator",
       "params_schema": [
         {
           "id": "model_variant",
@@ -147,6 +148,7 @@
       "output": "mesh",
       "hf_repo": "tencent/Hunyuan3D-2mv",
       "download_check": "hunyuan3d-dit-v2-mv/model.fp16.safetensors",
+      "generator_class": "Hunyuan3D2mvFastGenerator",
       "params_schema": [
         {
           "id": "model_variant",
@@ -270,6 +272,7 @@
       "output": "mesh",
       "hf_repo": "tencent/Hunyuan3D-2mv",
       "download_check": "hunyuan3d-dit-v2-mv/model.fp16.safetensors",
+      "generator_class": "Hunyuan3D2mvStandardGenerator",
       "params_schema": [
         {
           "id": "model_variant",
