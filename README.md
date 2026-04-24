@@ -1,5 +1,90 @@
 FOR WINDOWS CURRENTLY. I DO NOT HAVE OTHER OPERATING SYSTEMS:
 
+
+MODLY INSTALL FROM LIGHTNINGPIXEL's GITHUB REPO>>>>
+
+IF YOU DO NOT HAVE MODLY YET> FOR A WINDOWS INSTALL AT LEAST, HERE ARE THE INSTRUCTIONS VIA GITHUB SINCE THOSE ARE THE DIRECT FILES: 
+
+ Here are the commands for a clean install from GitHub on Windows (PowerShell):
+Step 1 — Clone the repo
+powershell[as admin] git clone https://github.com/lightningpixel/modly.git
+THEN move it somewhere else: recommended: 
+'''Move-Item "C:\Windows\system32\modly" "C:\Users\$env:USERNAME\modly"
+cd "C:\Users\$env:USERNAME\modly\api"
+''' [MAKE SURE TO REPLACE USERNAME with your folder name for your user]
+
+Thats the user folder so youll have less issues with powershell
+
+Step 2 — Set up the Python API backend
+python -m venv .venv
+
+
+NOTE: if python error: Python was not found; run without arguments to install from the Microsoft Store, or disable this shortcut from Settings > Apps > Advanced app settings > App execution aliases. just run this:
+'''
+winget install Python.Python.3.11 --override "/quiet InstallAllUsers=1 PrependPath=1"
+'''
+close/reopen powershell (REQUIRED)
+check version : '''python -version'''
+then run:
+
+'''cd "C:\Users\$env:USERNAME\modly\api" [MAKE SURE TO REPLACE USERNAME with your folder name for your user]
+python -m venv .venv
+''' 
+
+When completed:
+'''
+.venv\Scripts\activate
+'''
+IF ERROR WITH SCRIPT POLICY, run:
+'''Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser'''
+Y for yes
+then again:
+'''
+.venv\Scripts\activate
+'''
+
+THEN FINALLY lol, you can install requirements in that environment:
+'''
+pip install -r requirements.txt
+'''
+
+'''
+cd ..
+''' < goes back to modly folder directly
+
+Step 3 — Install frontend dependencies & run
+powershell[STILL AS ADMIN REMEMBER] npm install
+That needs Node.js! If you dont have it, it WILL error. 
+If error: 
+'''
+winget install OpenJS.NodeJS
+'''
+WHen complete, THEN I would do close and reopen powershell[ADMIN] since it installed the js. Then you can:
+'''
+cd C:\Users\modly\api
+'''
+''' 
+(It has to reactivate the environment folder because it was closed), so again:
+'''
+.venv\Scripts\activate [IF NOT ALREADY IN (.venv)]
+'''
+then:
+'''
+npm install - (I WOULDNT KNOW WHY IT WOULDNT INSTALL AT THIS POINT SO DONT ASK)
+
+
+
+ONCE you have npm, you can use their commands :)
+do:
+'''
+npm run dev  (STILL IN API FOLDER! VERY IMPORTANT)
+'''
+GIV IT A MINE and the Modly app SHOULD start!
+
+*The above was to install Modly via github to Windows from what I know. Other installs, search it up. I do not have Mac, Linux, etc
+
+
+THEN:::::::::::::::::
 1. Download Git: https://git-scm.com/download/win
 If Git is installed but not in PATH:
 
