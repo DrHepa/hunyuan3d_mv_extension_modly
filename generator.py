@@ -267,7 +267,7 @@ class Hunyuan3D2mvGenerator(BaseGenerator):
         )
         print("[Hunyuan3D2mvGenerator] Weights downloaded.")
 
-@classmethod
+    @classmethod
     def params_schema(cls):
         return [
             {
