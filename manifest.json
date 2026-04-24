@@ -133,8 +133,7 @@
           "max": 4294967295,
           "tooltip": "Change if result is unsatisfying."
         }
-      ],
-      "generator_class": "Hunyuan3D2mvTurboGenerator"
+      ]
     },
     {
       "id": "generate-fast",
@@ -257,8 +256,7 @@
           "max": 4294967295,
           "tooltip": "Change if result is unsatisfying."
         }
-      ],
-      "generator_class": "Hunyuan3D2mvFastGenerator"
+      ]
     },
     {
       "id": "generate",
@@ -381,8 +379,7 @@
           "max": 4294967295,
           "tooltip": "Change if result is unsatisfying."
         }
-      ],
-      "generator_class": "Hunyuan3D2mvStandardGenerator"
+      ]
     }
   ]
 }
