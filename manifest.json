@@ -17,7 +17,10 @@
       "name": "Generate Mesh (Turbo)",
       "input": "image",
       "inputs": [
-        { "id": "front_image", "type": "image", "label": "Image" }
+        { "id": "front_image", "type": "image", "label": "Front" },
+        { "id": "left_image",  "type": "image", "label": "Left"  },
+        { "id": "back_image",  "type": "image", "label": "Back"  },
+        { "id": "right_image", "type": "image", "label": "Right" }
       ],
       "output": "mesh",
       "hf_repo": "tencent/Hunyuan3D-2mv",
@@ -138,7 +141,10 @@
       "name": "Generate Mesh (Fast)",
       "input": "image",
       "inputs": [
-        { "id": "front_image", "type": "image", "label": "Image" }
+        { "id": "front_image", "type": "image", "label": "Front" },
+        { "id": "left_image",  "type": "image", "label": "Left"  },
+        { "id": "back_image",  "type": "image", "label": "Back"  },
+        { "id": "right_image", "type": "image", "label": "Right" }
       ],
       "output": "mesh",
       "hf_repo": "tencent/Hunyuan3D-2mv",
@@ -259,7 +265,10 @@
       "name": "Generate Mesh (Standard)",
       "input": "image",
       "inputs": [
-        { "id": "front_image", "type": "image", "label": "Image" }
+        { "id": "front_image", "type": "image", "label": "Front" },
+        { "id": "left_image",  "type": "image", "label": "Left"  },
+        { "id": "back_image",  "type": "image", "label": "Back"  },
+        { "id": "right_image", "type": "image", "label": "Right" }
       ],
       "output": "mesh",
       "hf_repo": "tencent/Hunyuan3D-2mv",
