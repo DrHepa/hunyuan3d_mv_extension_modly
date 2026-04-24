@@ -15,12 +15,8 @@
     {
       "id": "generate-turbo",
       "name": "Generate Mesh (Turbo)",
-      "input": "image",
       "inputs": [
-        { "id": "front_image", "type": "image", "label": "Front" },
-        { "id": "left_image",  "type": "image", "label": "Left"  },
-        { "id": "back_image",  "type": "image", "label": "Back"  },
-        { "id": "right_image", "type": "image", "label": "Right" }
+        { "id": "front_image", "type": "image", "label": "Image" }
       ],
       "output": "mesh",
       "hf_repo": "tencent/Hunyuan3D-2mv",
@@ -139,12 +135,8 @@
     {
       "id": "generate-fast",
       "name": "Generate Mesh (Fast)",
-      "input": "image",
       "inputs": [
-        { "id": "front_image", "type": "image", "label": "Front" },
-        { "id": "left_image",  "type": "image", "label": "Left"  },
-        { "id": "back_image",  "type": "image", "label": "Back"  },
-        { "id": "right_image", "type": "image", "label": "Right" }
+        { "id": "front_image", "type": "image", "label": "Image" }
       ],
       "output": "mesh",
       "hf_repo": "tencent/Hunyuan3D-2mv",
@@ -263,12 +255,8 @@
     {
       "id": "generate",
       "name": "Generate Mesh (Standard)",
-      "input": "image",
       "inputs": [
-        { "id": "front_image", "type": "image", "label": "Front" },
-        { "id": "left_image",  "type": "image", "label": "Left"  },
-        { "id": "back_image",  "type": "image", "label": "Back"  },
-        { "id": "right_image", "type": "image", "label": "Right" }
+        { "id": "front_image", "type": "image", "label": "Image" }
       ],
       "output": "mesh",
       "hf_repo": "tencent/Hunyuan3D-2mv",
