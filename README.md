@@ -106,6 +106,14 @@ Questions? Contact me or the Modly team as I will be giving all of this to them 
 
 FUTURE UPDATE: Added options to the mv generation as well as possible texturing ability since mv initially did not come with it. 
 
+###DEVELOPER NOTES###
+
+See `MODLY_CORE_NOTES.md` for the Modly core change needed to preserve named
+multi-image model inputs in workflows. Until Modly maps model inputs by
+`targetHandle`, connected workflow images still collapse to one primary front
+image. The extension can already consume optional side views when Modly passes
+them as `left_image_path`, `back_image_path`, and `right_image_path` params.
+
 
 
 ###ONCE EXTENSIONS ARE INSTALLED - DO NOT FORGET TO DOWNLOAD ANY WEIGHTS BEFORE TRYING TO USE THE EXTENSIONS###
