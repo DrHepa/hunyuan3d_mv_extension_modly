@@ -1,118 +1,136 @@
+# Hunyuan3D-2mv Modly Extension
 
+Multi-view image-to-mesh generation for Modly using Tencent Hunyuan3D-2mv.
 
-FOR WINDOWS CURRENTLY. I DO NOT HAVE OTHER OPERATING SYSTEMS:
+## Supported Platforms
 
+- **Windows**: existing install path remains supported.
+- **Linux ARM64 + NVIDIA CUDA**: first supported Linux target in this change.
+- **Other Linux/macOS targets**: not claimed as supported yet.
 
-MODLY INSTALL FROM LIGHTNINGPIXEL's GITHUB REPO>>>>
+## Linux ARM64 Prerequisites
 
-IF YOU DO NOT HAVE MODLY YET> FOR A WINDOWS INSTALL AT LEAST, HERE ARE THE INSTRUCTIONS VIA GITHUB SINCE THOSE ARE THE DIRECT FILES: 
+You need ALL of the following:
 
- Here are the commands for a clean install from GitHub on Windows (PowerShell):
->>>Step 1 — Clone the repo
-powershell[as admin] 
-'''git clone https://github.com/lightningpixel/modly.git'''
+- Linux on `aarch64`/`arm64`
+- NVIDIA GPU with **SM >= 70**
+- CUDA userspace/driver compatible with **CUDA 12.4** or **CUDA 12.8** wheels
+- Network access to:
+  - Hugging Face model downloads
+  - GitHub zip download for lazy `_hy3dgen` source extraction
+- A Modly install that can create the extension venv
 
->>>Step 2 -  move it somewhere else: recommended: 
-'''Move-Item "C:\Windows\system32\modly" "C:\Users\$env:USERNAME\modly"'''
-'''cd "C:\Users\$env:USERNAME\modly\api"'''
-[MAKE SURE TO REPLACE USERNAME with your folder name for your user]
+## Install Behavior
 
-Thats the user folder so youll have less issues with powershell
+### Linux ARM64 + NVIDIA CUDA
 
->>>Step 3 — Set up the Python API backend
-'''python -m venv .venv'''
+The installer now uses an explicit Linux ARM64 branch:
 
-NOTE: if python error: Python was not found; run without arguments to install from the Microsoft Store, or disable this shortcut from Settings > Apps > Advanced app settings > App execution aliases. just run this:
-'''winget install Python.Python.3.11 --override "/quiet InstallAllUsers=1 PrependPath=1"'''
-close/reopen powershell (REQUIRED)
+- installs **pinned** ARM64 CUDA wheels for Torch/Torchvision
+- does **not** require `xformers`
+- installs `rembg` + CPU `onnxruntime`
+- does **not** require `onnxruntime-gpu`
+- does **not** clone/install `Hunyuan3D-2` editable during setup
+- lazily downloads/extracts `_hy3dgen` source on first runtime import if needed
 
-check version : '''python -version'''
-then run:
-'''cd "C:\Users\$env:USERNAME\modly\api"''' [MAKE SURE TO REPLACE USERNAME with your folder name for your user]
-'''python -m venv .venv''' 
+Pinned Torch targets:
 
->>>Step 4 - activate the environment
-'''.venv\Scripts\activate'''
->>>
-IF ERROR WITH SCRIPT POLICY, run:
-'''Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser'''
-Y for yes
-then again:
-'''.venv\Scripts\activate'''
+- **cu124**: `torch==2.5.1`, `torchvision==0.20.1`
+- **cu128 / Blackwell-tier path**: `torch==2.7.0+cu128`, `torchvision==0.22.0`
 
->>>Step 5 - install requirements in that environment:
-'''pip install -r requirements.txt'''
+If a pinned ARM64 wheel is unavailable for the embedded Python tag, setup now fails clearly instead of silently downgrading.
 
-'''cd ..''' < goes back to modly folder directly
+### Windows / non-ARM64
 
-Step 6 — Install frontend dependencies & run
-powershell[STILL AS ADMIN REMEMBER] 
-'''npm install'''
+The prior behavior is intentionally preserved as much as possible:
 
-That needs Node.js! If you dont have it, it WILL error. 
-If error: 
-'''winget install OpenJS.NodeJS'''
-WHen complete, THEN I would do close and reopen powershell[ADMIN] since it installed the js.
+- existing GPU-SM-based Torch selection remains
+- `xformers` stays in the install path
+- editable `Hunyuan3D-2` repo install remains the compatibility path
+- `onnxruntime-gpu` is still attempted where it was already used
 
-'''cd C:\Users\modly\api'''
-(It has to reactivate the environment folder because it was closed), so again:
-''' .venv\Scripts\activate'''   [IF NOT ALREADY IN (.venv)]
+## Runtime Behavior
 
->>>Step 6 -
-'''npm install''' - (I WOULDNT KNOW WHY IT WOULDNT INSTALL AT THIS POINT SO DONT ASK)
-OR you could even be in the modly folder directly and run: 
-'''cmd /c launch.bat''' since it has that file in it. [RECOMMENDED]
+`generator.py` now resolves `hy3dgen` in this order:
 
-It should start the backend and run :) and NO FASTAPI ISSUES! which is good because if you tried to do some of this more 'manually', you would likely run into that issue :P
+1. already-installed `hy3dgen`
+2. extension-local `Hunyuan3D-2/`
+3. model cache `_hy3dgen/`
 
-*The above was to install Modly via github to Windows from what I know. Other installs, search it up. I do not have Mac, Linux, etc
-##########################
+On Linux ARM64, if `_hy3dgen` is missing, the generator downloads the upstream GitHub zip and extracts only the `hy3dgen/` tree into the model cache.
 
-NOTE: If you happen to recieve a "Something went wrong", it might be from development files on the github BUT if it's related to python, its possible to fix on your end luckily. 
-IF its something about a "Bundled Python" because tehnically if a program uses python, it should ahve it with the files", Then we can find the path or create it. 
-The requirements should have taken care of that during download but try this: 
-go back into the powershell under the modly folder still (admin), and type:
-'''node scripts/download-python-embed.js'''
-Thats a file in the scripts folder that does the python stuff for us that they made :) Make sure to thank them because it includes the environment! 
+Background removal behavior:
 
-Youll see the folder populate if you are in there. 
+- default path still uses upstream `BackgroundRemover`
+- on Linux ARM64 failure, runtime retries with `rembg.new_session(..., providers=["CPUExecutionProvider"])`
+- if both fail, generation continues with the original image and logs the reason
 
-###REQUIREMENTS FOR EXTENSION###
-1. Download Git: https://git-scm.com/download/win
-If Git is installed but not in PATH:
+## Known Limits / Non-Goals
 
-2. Open System Properties → Environment Variables
+This change does **not** claim support for:
 
-Add this to PATH:
-C:\Program Files\Git\cmd
+- CPU-only Linux inference
+- texgen/custom rasterizer ARM64 support
+- Modly core multi-input mapping fixes
 
-3. Restart Modly & Download the extension via Github
-You can then try to download the extension via github here: https://github.com/iammojogo-sudo/hunyuan3d_mv_extension_modly
+See `MODLY_CORE_NOTES.md` for the current named-input workflow limitation.
 
-5. any setup.py errors during extension install:
-Its likely either you are using OneDrive and/or have not allowed user permissions on files/folders, and/or it errored before but created a folder already in extensions that you need to delete from a previous error. Make sure modly installs directly on the system and you pick a data location on the system. 
-If its not, uninstall Modly, reinstall on the system. 
+## Manual Smoke Verification
 
-6. If it successfully installs extension, MAKE SURE to download the weights from the Modly extensions panel with the purple "Download" button. Wait until finished before you do anything else. If you want, you can restart Modly after the weights are downloaded. Otherwise if you do not have the weights, it will not run. 
+Do NOT build anything for this checklist.
 
-7. If you installed Modly directly, there are files to be replaced. I will contact the developer to include these in a next update and patch them in if they work and are tested by their team successfully. If not, I will fix them until they are ready for the update. UNTIL THEN, you will ONLY get to use 1 photo, which it defaults to "front" (can probably use any photo). Once the new files are ready, you will be able to utilize four photos
+### 1. Verify install package choices
 
-8. If it fails saying it cant find a model when the components are all there, you might need https://www.systoolsgroup.com/migrator/download-vc-redistributable.html. 
+Inside the extension venv, inspect installed packages and confirm:
 
-NOTE: the standard can work ok on 6GB VRAM but takes a while. It is recommended to have at least 8GB though. The other models are the same I believe and Turbo is actually more efficient on memory that standard anyhow. Fast is in between. Also, careful not to change panels when downloading weights as it might say they are done but they might not be. Best to close and reopen after a few minutes. 
+- Linux ARM64 does **not** install `xformers`
+- Linux ARM64 does **not** depend on `onnxruntime-gpu`
+- Torch/Torchvision match the pinned target expected for the host
 
-Questions? Contact me or the Modly team as I will be giving all of this to them for future updates. 
+Example checks:
 
-FUTURE UPDATE: Added options to the mv generation as well as possible texturing ability since mv initially did not come with it. 
+```bash
+venv/bin/pip show torch torchvision rembg onnxruntime
+venv/bin/pip show xformers onnxruntime-gpu
+```
 
-###DEVELOPER NOTES###
+### 2. Verify weight download
 
-See `MODLY_CORE_NOTES.md` for the Modly core change needed to preserve named
-multi-image model inputs in workflows. Until Modly maps model inputs by
-`targetHandle`, connected workflow images still collapse to one primary front
-image. The extension can already consume optional side views when Modly passes
-them as `left_image_path`, `back_image_path`, and `right_image_path` params.
+- Trigger the extension/model download from Modly
+- confirm model files land under the extension model directory
+- confirm the selected variant contains `model.fp16.safetensors`
 
+### 3. Verify generator load
 
+- load the extension once
+- confirm `hy3dgen` resolves from installed package, `Hunyuan3D-2`, or `_hy3dgen`
+- if `_hy3dgen` was absent, confirm it gets created under the model cache
 
-###ONCE EXTENSIONS ARE INSTALLED - DO NOT FORGET TO DOWNLOAD ANY WEIGHTS BEFORE TRYING TO USE THE EXTENSIONS###
+### 4. Verify background-removal fallback
+
+- run one generation with `remove_bg=true`
+- confirm Linux ARM64 can continue with CPU ONNX fallback if the default rembg provider path fails
+
+### 5. Verify GLB export
+
+- run one front-image generation
+- confirm a `.glb` file is written to the Modly workspace output directory
+
+## Validation Boundary
+
+- Full Modly backend/MCP validation requires a healthy local Modly backend.
+- If the backend is unavailable, validation is limited to local install/runtime smoke checks and static Windows regression review.
+- When the backend is healthy, run the Modly install/apply path plus the smoke checklist above before archiving the change.
+
+## Rollback
+
+If this compatibility path must be reverted:
+
+1. revert Linux ARM64 branches in `setup.py`
+2. revert layered `_hy3dgen` loading and Linux rembg fallback in `generator.py`
+3. remove Linux ARM64 support claims from `README.md`
+4. delete any temporary `_hy3dgen` cache created during manual testing
+
+## Developer Notes
+
+Until Modly maps model inputs by `targetHandle`, connected workflow images can still collapse to one primary front image. The extension already accepts optional side views when Modly passes `left_image_path`, `back_image_path`, and `right_image_path` params.

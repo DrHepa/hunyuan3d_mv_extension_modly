@@ -9,10 +9,13 @@ Pipeline:
 import base64
 import io
 import os
+import platform
 import sys
 import threading
 import time
+import urllib.request
 import uuid
+import zipfile
 from pathlib import Path
 
 from PIL import Image
@@ -30,6 +33,9 @@ def print(*args, **kwargs):
 
 
 _HF_REPO_ID = "tencent/Hunyuan3D-2mv"
+_GITHUB_ZIP = "https://github.com/Tencent-Hunyuan/Hunyuan3D-2/archive/refs/heads/main.zip"
+_HY3DGEN_PREFIX = "Hunyuan3D-2-main/hy3dgen/"
+_HY3DGEN_STRIP = "Hunyuan3D-2-main/"
 
 _SUBFOLDERS = {
     "hunyuan3d-dit-v2-mv-turbo": "hunyuan3d-dit-v2-mv-turbo",
@@ -84,15 +90,81 @@ class Hunyuan3D2mvGenerator(BaseGenerator):
         marker = self.model_dir / self.MODEL_VARIANT / "model.fp16.safetensors"
         return marker.exists()
 
-    def _ensure_hy3dgen_on_path(self):
+    def _is_linux_arm64(self):
+        machine = platform.machine().lower()
+        return platform.system() == "Linux" and machine in {"aarch64", "arm64"}
+
+    def _hy3dgen_search_roots(self):
+        roots = []
         repo_dir = Path(__file__).parent / "Hunyuan3D-2"
-        if not repo_dir.exists():
-            raise RuntimeError(
-                "Hunyuan3D-2 source not found at %s. Please reinstall or repair the extension."
-                % repo_dir
-            )
-        if str(repo_dir) not in sys.path:
-            sys.path.insert(0, str(repo_dir))
+        roots.append(("extension-installed", None, False))
+        roots.append(("extension-repo", repo_dir, False))
+        roots.append(("model-cache", self.model_dir / "_hy3dgen", self._is_linux_arm64()))
+        return roots
+
+    def _download_hy3dgen(self, dest):
+        dest.mkdir(parents=True, exist_ok=True)
+        print("[Hunyuan3D2mvGenerator] Downloading hy3dgen source from GitHub...")
+        with urllib.request.urlopen(_GITHUB_ZIP, timeout=180) as resp:
+            data = resp.read()
+
+        print("[Hunyuan3D2mvGenerator] Extracting hy3dgen...")
+        with zipfile.ZipFile(io.BytesIO(data)) as zf:
+            for member in zf.namelist():
+                if not member.startswith(_HY3DGEN_PREFIX):
+                    continue
+                rel = member[len(_HY3DGEN_STRIP):]
+                target = dest / rel
+                if member.endswith("/"):
+                    target.mkdir(parents=True, exist_ok=True)
+                else:
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    target.write_bytes(zf.read(member))
+
+        print("[Hunyuan3D2mvGenerator] hy3dgen extracted to %s" % dest)
+
+    def _ensure_hy3dgen_on_path(self):
+        searched = []
+        import_errors = []
+
+        try:
+            import hy3dgen  # noqa: F401
+
+            return
+        except ImportError as exc:
+            import_errors.append("installed package: %s" % exc)
+
+        for label, root, allow_download in self._hy3dgen_search_roots()[1:]:
+            searched.append("%s=%s" % (label, root))
+
+            if allow_download and not (root / "hy3dgen").exists():
+                self._download_hy3dgen(root)
+
+            if root.exists() and str(root) not in sys.path:
+                sys.path.insert(0, str(root))
+
+            try:
+                import hy3dgen  # noqa: F401
+
+                return
+            except ImportError as exc:
+                import_errors.append("%s: %s" % (label, exc))
+
+        raise RuntimeError(
+            "hy3dgen import failed. Searched paths: %s. Repair the extension install or remove the bad cache and retry. Details: %s"
+            % ("; ".join(searched), " | ".join(import_errors))
+        )
+
+    def _init_background_remover(self):
+        try:
+            from hy3dgen.rembg import BackgroundRemover
+
+            return BackgroundRemover(), None
+        except Exception as exc:
+            if not self._is_linux_arm64():
+                raise
+            print("[Hunyuan3D2mvGenerator] BackgroundRemover init failed on Linux ARM64, will retry via CPU rembg session: %s" % exc)
+            return None, exc
 
     def load(self):
         if self._model is not None:
@@ -104,12 +176,11 @@ class Hunyuan3D2mvGenerator(BaseGenerator):
         self._ensure_hy3dgen_on_path()
 
         import torch
-        from hy3dgen.rembg import BackgroundRemover
         from hy3dgen.shapegen import Hunyuan3DDiTFlowMatchingPipeline
 
         self._device = "cuda" if torch.cuda.is_available() else "cpu"
         self._dtype = torch.float16 if self._device == "cuda" else torch.float32
-        self._rembg = BackgroundRemover()
+        self._rembg, self._rembg_init_error = self._init_background_remover()
         self._loaded_variant = None
         self._pipeline = None
         self._Pipeline = Hunyuan3DDiTFlowMatchingPipeline
@@ -274,11 +345,27 @@ class Hunyuan3D2mvGenerator(BaseGenerator):
         return self._remove_bg(img) if remove_bg else img
 
     def _remove_bg(self, img):
-        try:
-            return self._rembg(img)
-        except Exception as exc:
-            print("[Hunyuan3D2mvGenerator] Background removal failed, using original image: %s" % exc)
-            return img
+        if self._rembg is not None:
+            try:
+                return self._rembg(img)
+            except Exception as exc:
+                print("[Hunyuan3D2mvGenerator] BackgroundRemover failed, retrying fallback path: %s" % exc)
+
+        if self._is_linux_arm64():
+            try:
+                import rembg
+
+                session = rembg.new_session("u2net", providers=["CPUExecutionProvider"])
+                return rembg.remove(img, session=session)
+            except Exception as exc:
+                init_msg = ""
+                if self._rembg_init_error is not None:
+                    init_msg = " (initial BackgroundRemover error: %s)" % self._rembg_init_error
+                print("[Hunyuan3D2mvGenerator] Linux ARM64 rembg CPU fallback failed, using original image: %s%s" % (exc, init_msg))
+                return img
+
+        print("[Hunyuan3D2mvGenerator] Background removal unavailable, using original image.")
+        return img
 
     def _auto_download(self):
         self._download_weights()
