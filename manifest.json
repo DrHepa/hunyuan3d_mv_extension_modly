@@ -16,30 +16,12 @@
     {
       "id": "generate-turbo",
       "name": "Generate Mesh (Turbo)",
-      "input": "image",
       "inputs": [
-        {
-          "name": "front",
-          "type": "image",
-          "required": true
-        },
-        {
-          "name": "left",
-          "type": "image",
-          "required": false
-        },
-        {
-          "name": "back",
-          "type": "image",
-          "required": false
-        },
-        {
-          "name": "right",
-          "type": "image",
-          "required": false
-        }
+        "image",
+        "image",
+        "image",
+        "image"
       ],
-      "output": "mesh",
       "hf_repo": "tencent/Hunyuan3D-2mv",
       "download_check": "hunyuan3d-dit-v2-mv-turbo/model.fp16.safetensors",
       "hf_skip_prefixes": [
@@ -275,35 +257,18 @@
           "tooltip": "Change if result is unsatisfying."
         }
       ],
-      "generator_class": "Hunyuan3D2mvTurboGenerator"
+      "output": "mesh",
+      "input": "image"
     },
     {
       "id": "generate-fast",
       "name": "Generate Mesh (Fast)",
-      "input": "image",
       "inputs": [
-        {
-          "name": "front",
-          "type": "image",
-          "required": true
-        },
-        {
-          "name": "left",
-          "type": "image",
-          "required": false
-        },
-        {
-          "name": "back",
-          "type": "image",
-          "required": false
-        },
-        {
-          "name": "right",
-          "type": "image",
-          "required": false
-        }
+        "image",
+        "image",
+        "image",
+        "image"
       ],
-      "output": "mesh",
       "hf_repo": "tencent/Hunyuan3D-2mv",
       "download_check": "hunyuan3d-dit-v2-mv-fast/model.fp16.safetensors",
       "hf_skip_prefixes": [
@@ -539,35 +504,18 @@
           "tooltip": "Change if result is unsatisfying."
         }
       ],
-      "generator_class": "Hunyuan3D2mvFastGenerator"
+      "output": "mesh",
+      "input": "image"
     },
     {
       "id": "generate",
       "name": "Generate Mesh (Standard)",
-      "input": "image",
       "inputs": [
-        {
-          "name": "front",
-          "type": "image",
-          "required": true
-        },
-        {
-          "name": "left",
-          "type": "image",
-          "required": false
-        },
-        {
-          "name": "back",
-          "type": "image",
-          "required": false
-        },
-        {
-          "name": "right",
-          "type": "image",
-          "required": false
-        }
+        "image",
+        "image",
+        "image",
+        "image"
       ],
-      "output": "mesh",
       "hf_repo": "tencent/Hunyuan3D-2mv",
       "download_check": "hunyuan3d-dit-v2-mv/model.fp16.safetensors",
       "hf_skip_prefixes": [
@@ -803,7 +751,8 @@
           "tooltip": "Change if result is unsatisfying."
         }
       ],
-      "generator_class": "Hunyuan3D2mvStandardGenerator"
+      "output": "mesh",
+      "input": "image"
     }
   ],
   "generator_class": "Hunyuan3D2mvGenerator"
