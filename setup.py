@@ -29,7 +29,6 @@ def python_exe_in_venv(venv):
 
 def setup(python_exe, ext_dir, gpu_sm):
     venv = ext_dir / "venv"
-    is_win = platform.system() == "Windows"
 
     print("[setup] Creating venv at %s ..." % venv)
     subprocess.run([python_exe, "-m", "venv", str(venv)], check=True)
@@ -79,16 +78,23 @@ def setup(python_exe, ext_dir, gpu_sm):
     else:
         print("[setup] Repo already exists, skipping clone.")
 
-    print("[setup] Installing hy3dgen package...")
     venv_python = python_exe_in_venv(venv)
+
+    print("[setup] Building custom rasterizer...")
+    subprocess.run(
+        [str(venv_python), "setup.py", "build_ext", "--inplace"],
+        cwd=str(repo_dir / "hy3dgen" / "texgen" / "custom_rasterizer"),
+        check=True
+    )
+
+    print("[setup] Installing hy3dgen package...")
     subprocess.run(
         [str(venv_python), "-m", "pip", "install", "-e", str(repo_dir)],
         check=True
     )
 
     # ------------------------------------------------------------------ #
-    # Core dependencies from requirements.txt
-    # (shape-only - skip texture custom rasterizer compilation)
+    # Core dependencies
     # ------------------------------------------------------------------ #
     print("[setup] Installing core dependencies...")
     pip(venv, "install",
@@ -108,7 +114,7 @@ def setup(python_exe, ext_dir, gpu_sm):
         "tqdm",
         "safetensors",
         "rembg",
-        "onnxruntime",
+        "ninja",
     )
 
     # ------------------------------------------------------------------ #
