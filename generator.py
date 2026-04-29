@@ -33,8 +33,8 @@ _HF_REPO_ID = "tencent/Hunyuan3D-2mv"
 
 _SUBFOLDERS = {
     "hunyuan3d-dit-v2-mv-turbo": "hunyuan3d-dit-v2-mv-turbo",
-    "hunyuan3d-dit-v2-mv-fast": "hunyuan3d-dit-v2-mv-fast",
-    "hunyuan3d-dit-v2-mv": "hunyuan3d-dit-v2-mv",
+    "hunyuan3d-dit-v2-mv-fast":  "hunyuan3d-dit-v2-mv-fast",
+    "hunyuan3d-dit-v2-mv":       "hunyuan3d-dit-v2-mv",
 }
 
 
@@ -113,7 +113,6 @@ class Hunyuan3D2mvGenerator(BaseGenerator):
         self._loaded_variant = None
         self._pipeline = None
         self._Pipeline = Hunyuan3DDiTFlowMatchingPipeline
-        self._torch = torch
         self._model = True
         print("[Hunyuan3D2mvGenerator] Ready on %s." % self._device)
 
@@ -137,6 +136,7 @@ class Hunyuan3D2mvGenerator(BaseGenerator):
             variant="fp16",
             dtype=self._dtype,
             device=self._device,
+            local_files_only=True,
         )
         self._loaded_variant = variant
         print("[Hunyuan3D2mvGenerator] Variant loaded: %s" % variant)
@@ -147,7 +147,6 @@ class Hunyuan3D2mvGenerator(BaseGenerator):
         self._model = None
         try:
             import torch
-
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
         except ImportError:
@@ -157,15 +156,15 @@ class Hunyuan3D2mvGenerator(BaseGenerator):
         import torch
 
         params = params or {}
-        variant = params.get("model_variant") or self.MODEL_VARIANT
-        steps = _safe_int(params.get("num_inference_steps"), 30)
-        octree_res = _safe_int(params.get("octree_resolution"), 380)
-        seed = _safe_int(params.get("seed"), 42)
+        variant      = params.get("model_variant") or self.MODEL_VARIANT
+        steps        = _safe_int(params.get("num_inference_steps"), 30)
+        octree_res   = _safe_int(params.get("octree_resolution"), 380)
+        seed         = _safe_int(params.get("seed"), 42)
         guidance_scale = _safe_float(params.get("guidance_scale"), 5.0)
-        num_chunks = _safe_int(params.get("num_chunks"), 8000)
-        box_v = _safe_float(params.get("box_v"), 1.01)
-        mc_level = _safe_float(params.get("mc_level"), 0.0)
-        remove_bg = _safe_bool(params.get("remove_bg"), True)
+        num_chunks   = _safe_int(params.get("num_chunks"), 8000)
+        box_v        = _safe_float(params.get("box_v"), 1.01)
+        mc_level     = _safe_float(params.get("mc_level"), 0.0)
+        remove_bg    = _safe_bool(params.get("remove_bg"), True)
 
         print(
             "[Hunyuan3D2mvGenerator] Parsed params: variant=%s steps=%s octree=%s "
@@ -217,10 +216,7 @@ class Hunyuan3D2mvGenerator(BaseGenerator):
                     generator=generator,
                     output_type="trimesh",
                 )
-                print("[Hunyuan3D2mvGenerator] Pipeline result type: %s" % type(result))
-                print("[Hunyuan3D2mvGenerator] Pipeline result length: %s" % len(result) if hasattr(result, '__len__') else "N/A")
                 mesh = result[0]
-                print("[Hunyuan3D2mvGenerator] Mesh type: %s" % type(mesh))
         finally:
             stop_evt.set()
             if progress_thread:
@@ -229,31 +225,16 @@ class Hunyuan3D2mvGenerator(BaseGenerator):
         self._check_cancelled(cancel_event)
 
         self._report(progress_cb, 94, "Validating and exporting mesh...")
-        
-        # Validate mesh before export
+
         if mesh is None:
             raise RuntimeError("Generated mesh is None")
-        
-        if not hasattr(mesh, 'vertices') or mesh.vertices is None or len(mesh.vertices) == 0:
+        if not hasattr(mesh, "vertices") or mesh.vertices is None or len(mesh.vertices) == 0:
             raise RuntimeError("Generated mesh has no vertices")
-        
-        if not hasattr(mesh, 'faces') or mesh.faces is None or len(mesh.faces) == 0:
+        if not hasattr(mesh, "faces") or mesh.faces is None or len(mesh.faces) == 0:
             raise RuntimeError("Generated mesh has no faces")
-        
-        print("[Hunyuan3D2mvGenerator] Mesh validation passed: %d vertices, %d faces" % (len(mesh.vertices), len(mesh.faces)))
-        
-        # Check mesh bounds
-        bounds = mesh.bounds
-        print("[Hunyuan3D2mvGenerator] Mesh bounds: %s" % bounds)
-        
-        extents = mesh.extents
-        print("[Hunyuan3D2mvGenerator] Mesh extents: %s" % extents)
-        
-        if extents is not None and all(e > 0 for e in extents):
-            print("[Hunyuan3D2mvGenerator] Mesh has valid extents")
-        else:
-            print("[Hunyuan3D2mvGenerator] WARNING: Mesh may have degenerate geometry (zero extent in some axes)")
-        
+
+        print("[Hunyuan3D2mvGenerator] Mesh validated: %d vertices, %d faces" % (len(mesh.vertices), len(mesh.faces)))
+
         self.outputs_dir.mkdir(parents=True, exist_ok=True)
         out_path = self.outputs_dir / ("%d_%s.glb" % (int(time.time()), uuid.uuid4().hex[:8]))
         mesh.export(str(out_path))
