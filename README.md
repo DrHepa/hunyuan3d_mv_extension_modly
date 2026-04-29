@@ -5,8 +5,79 @@ Multi-view image-to-mesh generation for Modly using Tencent Hunyuan3D-2mv.
 ## Supported Platforms
 
 - **Windows**: existing install path remains supported.
-- **Linux ARM64 + NVIDIA CUDA**: first supported Linux target in this change.
+- **Linux ARM64 + NVIDIA CUDA**: first supported Linux target.
 - **Other Linux/macOS targets**: not claimed as supported yet.
+
+## Windows Modly Installation Guide
+
+This guide provides a clean installation process for Windows users using PowerShell.
+
+### 1. Core Installation
+
+Open a standard PowerShell window. Administrator access is not required for this part.
+
+#### Step A: Clone Modly
+
+```powershell
+git clone https://github.com/lightningpixel/modly.git
+cd "$HOME\modly\api"
+```
+
+#### Step B: Set up the Python environment
+
+```powershell
+python -m venv .venv
+Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+```
+
+### 2. Frontend Setup and Launch
+
+Ensure Node.js is installed, then run:
+
+```powershell
+cd "$HOME\modly"
+npm install
+cmd /c launch.bat
+```
+
+### Windows Troubleshooting
+
+- If Python is missing, install it and restart PowerShell:
+
+  ```powershell
+  winget install Python.Python.3.11 --override "/quiet InstallAllUsers=1 PrependPath=1"
+  ```
+
+- If `npm install` fails because Node.js is missing, install it and restart PowerShell:
+
+  ```powershell
+  winget install OpenJS.NodeJS
+  ```
+
+- If Modly cannot find its bundled Python files, run:
+
+  ```powershell
+  cd "$HOME\modly"
+  node scripts/download-python-embed.js
+  ```
+
+- Do **not** install Modly inside a OneDrive folder; it can cause permission errors.
+- Ensure `C:\Program Files\Git\cmd` is in your System Path.
+- If model components are present but reported as missing, install the [VC Redistributable](https://aka.ms).
+
+## Extension Installation Notes
+
+1. Install the extension in Modly.
+2. Open the Modly extensions panel and click the download button for the Hunyuan3D weights.
+3. Stay on the tab until the download finishes, then restart Modly.
+
+Hardware and performance notes:
+
+- **VRAM**: 6 GB minimum, 8 GB or more recommended.
+- **Efficiency**: the Turbo model is more memory-efficient than Standard.
+- **Multi-image inputs**: until Modly core maps model inputs by `targetHandle`, connected workflow images can still collapse to one primary front image. The extension accepts optional side views when Modly passes `left_image_path`, `back_image_path`, and `right_image_path` params.
 
 ## Linux ARM64 Prerequisites
 
@@ -24,7 +95,7 @@ You need ALL of the following:
 
 ### Linux ARM64 + NVIDIA CUDA
 
-The installer now uses an explicit Linux ARM64 branch:
+The installer uses an explicit Linux ARM64 branch:
 
 - installs **pinned** ARM64 CUDA wheels for Torch/Torchvision
 - does **not** require `xformers`
@@ -38,7 +109,7 @@ Pinned Torch targets:
 - **cu124**: `torch==2.5.1`, `torchvision==0.20.1`
 - **cu128 / Blackwell-tier path**: `torch==2.7.0+cu128`, `torchvision==0.22.0`
 
-If a pinned ARM64 wheel is unavailable for the embedded Python tag, setup now fails clearly instead of silently downgrading.
+If a pinned ARM64 wheel is unavailable for the embedded Python tag, setup fails clearly instead of silently downgrading.
 
 ### Windows / non-ARM64
 
@@ -47,11 +118,12 @@ The prior behavior is intentionally preserved as much as possible:
 - existing GPU-SM-based Torch selection remains
 - `xformers` stays in the install path
 - editable `Hunyuan3D-2` repo install remains the compatibility path
-- `onnxruntime-gpu` is still attempted where it was already used
+- the custom rasterizer build runs before the editable `hy3dgen` install
+- `onnxruntime-gpu` is still attempted where it was already used, with CPU `onnxruntime` retained as fallback
 
 ## Runtime Behavior
 
-`generator.py` now resolves `hy3dgen` in this order:
+`generator.py` resolves `hy3dgen` in this order:
 
 1. already-installed `hy3dgen`
 2. extension-local `Hunyuan3D-2/`
@@ -65,9 +137,11 @@ Background removal behavior:
 - on Linux ARM64 failure, runtime retries with `rembg.new_session(..., providers=["CPUExecutionProvider"])`
 - if both fail, generation continues with the original image and logs the reason
 
+Before export, generated meshes are validated for non-empty vertices and faces so failed generations stop with a clear error instead of exporting an invalid GLB.
+
 ## Known Limits / Non-Goals
 
-This change does **not** claim support for:
+This extension does **not** claim support for:
 
 - CPU-only Linux inference
 - texgen/custom rasterizer ARM64 support
@@ -133,4 +207,4 @@ If this compatibility path must be reverted:
 
 ## Developer Notes
 
-Until Modly maps model inputs by `targetHandle`, connected workflow images can still collapse to one primary front image. The extension already accepts optional side views when Modly passes `left_image_path`, `back_image_path`, and `right_image_path` params.
+See `MODLY_CORE_NOTES.md` for details on preserving named multi-image inputs. The extension is pre-configured to handle `left`, `back`, and `right` image paths once the core mapping is updated.
