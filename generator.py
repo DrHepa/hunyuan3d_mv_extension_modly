@@ -33,15 +33,26 @@ def print(*args, **kwargs):
 
 
 _HF_REPO_ID = "tencent/Hunyuan3D-2mv"
+_TEXGEN_HF_REPO_ID = "tencent/Hunyuan3D-2"
 _GITHUB_ZIP = "https://github.com/Tencent-Hunyuan/Hunyuan3D-2/archive/refs/heads/main.zip"
 _HY3DGEN_PREFIX = "Hunyuan3D-2-main/hy3dgen/"
 _HY3DGEN_STRIP = "Hunyuan3D-2-main/"
+_TEXGEN_ROOT_DIRNAME = "Hunyuan3D-2"
+_TEXGEN_DELIGHT_DIRNAME = "hunyuan3d-delight-v2-0"
+_TEXGEN_PAINT_PREFIX = "hunyuan3d" + "-" + "paint-v2-0"
 
 _SUBFOLDERS = {
     "hunyuan3d-dit-v2-mv-turbo": "hunyuan3d-dit-v2-mv-turbo",
     "hunyuan3d-dit-v2-mv-fast":  "hunyuan3d-dit-v2-mv-fast",
     "hunyuan3d-dit-v2-mv":       "hunyuan3d-dit-v2-mv",
 }
+
+_TEXTURE_VARIANTS = {
+    "turbo": _TEXGEN_PAINT_PREFIX + "-turbo",
+    "standard": _TEXGEN_PAINT_PREFIX,
+}
+
+_TEXTURE_INPUT_MODES = {"front", "multiview"}
 
 
 def _safe_float(val, default):
@@ -70,6 +81,18 @@ def _safe_bool(val, default=True):
     if val is None:
         return default
     return bool(val)
+
+
+def _safe_choice(val, allowed, default, label):
+    if val in allowed:
+        return val
+    if isinstance(val, str):
+        text = val.strip().lower()
+        if text in allowed:
+            return text
+    if val not in (None, ""):
+        print("[Hunyuan3D2mvGenerator] Invalid %s=%r, using default %r." % (label, val, default))
+    return default
 
 
 def _strip_data_url(value):
@@ -183,6 +206,8 @@ class Hunyuan3D2mvGenerator(BaseGenerator):
         self._rembg, self._rembg_init_error = self._init_background_remover()
         self._loaded_variant = None
         self._pipeline = None
+        self._paint_pipeline = None
+        self._paint_variant = None
         self._Pipeline = Hunyuan3DDiTFlowMatchingPipeline
         self._model = True
         print("[Hunyuan3D2mvGenerator] Ready on %s." % self._device)
@@ -215,6 +240,8 @@ class Hunyuan3D2mvGenerator(BaseGenerator):
     def unload(self):
         self._pipeline = None
         self._loaded_variant = None
+        self._paint_pipeline = None
+        self._paint_variant = None
         self._model = None
         try:
             import torch
@@ -227,29 +254,37 @@ class Hunyuan3D2mvGenerator(BaseGenerator):
         import torch
 
         params = params or {}
-        variant      = params.get("model_variant") or self.MODEL_VARIANT
-        steps        = _safe_int(params.get("num_inference_steps"), 30)
-        octree_res   = _safe_int(params.get("octree_resolution"), 380)
-        seed         = _safe_int(params.get("seed"), 42)
+        shape_params = self._parse_shape_params(params)
+        texture_params = self._parse_texture_params(params)
+
         guidance_scale = _safe_float(params.get("guidance_scale"), 5.0)
-        num_chunks   = _safe_int(params.get("num_chunks"), 8000)
-        box_v        = _safe_float(params.get("box_v"), 1.01)
-        mc_level     = _safe_float(params.get("mc_level"), 0.0)
-        remove_bg    = _safe_bool(params.get("remove_bg"), True)
 
         print(
             "[Hunyuan3D2mvGenerator] Parsed params: variant=%s steps=%s octree=%s "
-            "guidance=%.2f chunks=%s box_v=%.3f mc_level=%.4f remove_bg=%s seed=%s"
-            % (variant, steps, octree_res, guidance_scale, num_chunks, box_v, mc_level, remove_bg, seed)
+            "guidance=%.2f chunks=%s box_v=%.3f mc_level=%.4f remove_bg=%s seed=%s include_texture=%s texture_variant=%s texture_input_mode=%s"
+            % (
+                shape_params["variant"],
+                shape_params["steps"],
+                shape_params["octree_res"],
+                guidance_scale,
+                shape_params["num_chunks"],
+                shape_params["box_v"],
+                shape_params["mc_level"],
+                shape_params["remove_bg"],
+                shape_params["seed"],
+                texture_params["include_texture"],
+                texture_params["texture_model_variant"],
+                texture_params["texture_input_mode"],
+            )
         )
 
         self._report(progress_cb, 5, "Preprocessing front view...")
-        front_image = self._preprocess_bytes(image_bytes, remove_bg=remove_bg)
+        front_image = self._preprocess_bytes(image_bytes, remove_bg=shape_params["remove_bg"])
         self._check_cancelled(cancel_event)
 
         image_dict = {"front": front_image}
         for view_name, pct in (("left", 10), ("back", 14), ("right", 18)):
-            image = self._optional_view_image(params, view_name, remove_bg)
+            image = self._optional_view_image(params, view_name, shape_params["remove_bg"])
             if image is None:
                 continue
             self._report(progress_cb, pct, "Preprocessing %s view..." % view_name)
@@ -259,7 +294,7 @@ class Hunyuan3D2mvGenerator(BaseGenerator):
         print("[Hunyuan3D2mvGenerator] image_dict keys: %s" % list(image_dict.keys()))
 
         self._report(progress_cb, 22, "Loading model variant...")
-        self._load_variant(variant)
+        self._load_variant(shape_params["variant"])
         self._check_cancelled(cancel_event)
 
         self._report(progress_cb, 30, "Generating mesh...")
@@ -274,16 +309,16 @@ class Hunyuan3D2mvGenerator(BaseGenerator):
             progress_thread.start()
 
         try:
-            generator = torch.Generator(device=self._device).manual_seed(seed)
+            generator = torch.Generator(device=self._device).manual_seed(shape_params["seed"])
             with torch.no_grad():
                 result = self._pipeline(
                     image=image_dict,
-                    num_inference_steps=steps,
-                    octree_resolution=octree_res,
+                    num_inference_steps=shape_params["steps"],
+                    octree_resolution=shape_params["octree_res"],
                     guidance_scale=guidance_scale,
-                    num_chunks=num_chunks,
-                    box_v=box_v,
-                    mc_level=mc_level,
+                    num_chunks=shape_params["num_chunks"],
+                    box_v=shape_params["box_v"],
+                    mc_level=shape_params["mc_level"],
                     generator=generator,
                     output_type="trimesh",
                 )
@@ -295,8 +330,602 @@ class Hunyuan3D2mvGenerator(BaseGenerator):
 
         self._check_cancelled(cancel_event)
 
-        self._report(progress_cb, 94, "Validating and exporting mesh...")
+        self._validate_mesh(mesh)
 
+        if texture_params["include_texture"]:
+            probe = self._probe_texgen(texture_params["texture_model_variant"])
+            if not probe["ok"]:
+                raise RuntimeError(self._format_texgen_probe_error(probe))
+            self._report(progress_cb, 94, "Texturing mesh...")
+            texture_images = self._select_texture_images(image_dict, texture_params["texture_input_mode"])
+            self._check_cancelled(cancel_event)
+            paint_pipeline = self._load_paint_pipeline(probe)
+            mesh = self._texture_mesh(mesh, texture_images, paint_pipeline, texture_params, probe)
+            self._validate_mesh(mesh)
+
+        self._report(progress_cb, 98, "Exporting mesh...")
+        out_path = self._export_mesh(mesh)
+
+        self._report(progress_cb, 100, "Done")
+        return str(out_path)
+
+    def _parse_shape_params(self, params):
+        return {
+            "variant": params.get("model_variant") or self.MODEL_VARIANT,
+            "steps": _safe_int(params.get("num_inference_steps"), 30),
+            "octree_res": _safe_int(params.get("octree_resolution"), 380),
+            "seed": _safe_int(params.get("seed"), 42),
+            "num_chunks": _safe_int(params.get("num_chunks"), 8000),
+            "box_v": _safe_float(params.get("box_v"), 1.01),
+            "mc_level": _safe_float(params.get("mc_level"), 0.0),
+            "remove_bg": _safe_bool(params.get("remove_bg"), True),
+        }
+
+    def _parse_texture_params(self, params):
+        return {
+            "include_texture": _safe_bool(params.get("include_texture"), False),
+            "texture_model_variant": _safe_choice(
+                params.get("texture_model_variant"),
+                set(_TEXTURE_VARIANTS.keys()),
+                "turbo",
+                "texture_model_variant",
+            ),
+            "texture_input_mode": _safe_choice(
+                params.get("texture_input_mode"),
+                _TEXTURE_INPUT_MODES,
+                "front",
+                "texture_input_mode",
+            ),
+        }
+
+    def _texgen_root(self):
+        return self.model_dir / _TEXGEN_ROOT_DIRNAME
+
+    def _required_texture_paths(self, variant, root=None):
+        root = Path(root or self._texgen_root())
+        paint_folder = _TEXTURE_VARIANTS[variant]
+        required = {
+            "root": root,
+            "paint_folder": paint_folder,
+            "delight_folder": _TEXGEN_DELIGHT_DIRNAME,
+            "paint_path": root / paint_folder,
+            "delight_path": root / _TEXGEN_DELIGHT_DIRNAME,
+        }
+        if variant == "turbo":
+            standard_path = root / _TEXTURE_VARIANTS["standard"]
+            required["standard_text_encoder_path"] = standard_path / "text_encoder"
+            required["standard_vae_path"] = standard_path / "vae"
+        return required
+
+    def _texture_component_has_weight(self, path, names):
+        return path.exists() and any((path / name).exists() for name in names)
+
+    def _missing_texture_asset_details(self, required, variant):
+        missing = []
+        if not required["paint_path"].exists():
+            missing.append("paint=%s" % required["paint_path"])
+        if not required["delight_path"].exists():
+            missing.append("delight=%s" % required["delight_path"])
+        if variant == "turbo":
+            text_encoder_path = required["standard_text_encoder_path"]
+            vae_path = required["standard_vae_path"]
+            if not self._texture_component_has_weight(
+                text_encoder_path,
+                ("pytorch_model.bin", "model.safetensors", "tf_model.h5", "model.ckpt.index", "flax_model.msgpack"),
+            ):
+                missing.append("standard_text_encoder=%s" % text_encoder_path)
+            if not self._texture_component_has_weight(
+                vae_path,
+                ("diffusion_pytorch_model.bin", "diffusion_pytorch_model.safetensors", "model.safetensors"),
+            ):
+                missing.append("standard_vae=%s" % vae_path)
+        return missing
+
+    def _texture_required_paths_payload(self, required):
+        payload = {
+            "root": str(required["root"]),
+            "paint": str(required["paint_path"]),
+            "delight": str(required["delight_path"]),
+        }
+        if "standard_text_encoder_path" in required:
+            payload["standard_text_encoder"] = str(required["standard_text_encoder_path"])
+        if "standard_vae_path" in required:
+            payload["standard_vae"] = str(required["standard_vae_path"])
+        return payload
+
+    def _texture_download_allow_patterns(self, variant):
+        required = self._required_texture_paths(variant)
+        paint_folder = required["paint_folder"]
+        delight_folder = required["delight_folder"]
+        return [
+            "%s" % paint_folder,
+            "%s/*" % paint_folder,
+            "%s/**/*" % paint_folder,
+            "%s" % delight_folder,
+            "%s/*" % delight_folder,
+            "%s/**/*" % delight_folder,
+            "%s/text_encoder/*" % _TEXTURE_VARIANTS["standard"],
+            "%s/vae/*" % _TEXTURE_VARIANTS["standard"],
+            "*.json",
+            "*.yaml",
+            "*.yml",
+            "*.model",
+            "*.txt",
+            "*.py",
+            "*.pth",
+            "*.safetensors",
+        ]
+
+    def _ensure_texture_assets(self, variant):
+        required = self._required_texture_paths(variant)
+        missing_assets = self._missing_texture_asset_details(required, variant)
+        if not missing_assets:
+            return {
+                "ok": True,
+                "downloaded": False,
+                "paint_root": str(required["root"]),
+                "paint_path": str(required["paint_path"]),
+                "delight_path": str(required["delight_path"]),
+                "required_paths": self._texture_required_paths_payload(required),
+            }
+
+        required["root"].mkdir(parents=True, exist_ok=True)
+
+        try:
+            from huggingface_hub import snapshot_download
+        except Exception as exc:
+            return {
+                "ok": False,
+                "downloaded": False,
+                "error": (
+                    "Texture assets are missing under the extension-owned texgen root %s, and huggingface_hub is unavailable for lazy download: %s"
+                    % (required["root"], exc)
+                ),
+                "paint_root": str(required["root"]),
+                "paint_path": None,
+                "delight_path": None,
+                "required_paths": self._texture_required_paths_payload(required),
+            }
+
+        allow_patterns = self._texture_download_allow_patterns(variant)
+        print(
+            "[Hunyuan3D2mvGenerator] Missing texgen assets; downloading filtered snapshot from %s into %s ..."
+            % (_TEXGEN_HF_REPO_ID, required["root"])
+        )
+        try:
+            snapshot_download(
+                repo_id=_TEXGEN_HF_REPO_ID,
+                local_dir=str(required["root"]),
+                allow_patterns=allow_patterns,
+                ignore_patterns=[
+                    "*.md",
+                    "LICENSE",
+                    "NOTICE",
+                    ".gitattributes",
+                ],
+            )
+        except Exception as exc:
+            return {
+                "ok": False,
+                "downloaded": False,
+                "error": (
+                    "Unable to download required texture assets from %s into %s. Check network access and Hugging Face authentication/token if the repo requires it, then retry. Underlying error: %s"
+                    % (_TEXGEN_HF_REPO_ID, required["root"], exc)
+                ),
+                "paint_root": str(required["root"]),
+                "paint_path": None,
+                "delight_path": None,
+                "required_paths": self._texture_required_paths_payload(required),
+            }
+
+        missing_assets = self._missing_texture_asset_details(required, variant)
+        if not missing_assets:
+            print("[Hunyuan3D2mvGenerator] Texgen assets ready at %s." % required["root"])
+            return {
+                "ok": True,
+                "downloaded": True,
+                "paint_root": str(required["root"]),
+                "paint_path": str(required["paint_path"]),
+                "delight_path": str(required["delight_path"]),
+                "required_paths": self._texture_required_paths_payload(required),
+            }
+
+        return {
+            "ok": False,
+            "downloaded": True,
+            "error": (
+                "Filtered texgen download completed but required assets are still incomplete under %s. Missing: %s."
+                % (required["root"], "; ".join(missing_assets))
+            ),
+            "paint_root": str(required["root"]),
+            "paint_path": None,
+            "delight_path": None,
+            "required_paths": self._texture_required_paths_payload(required),
+        }
+
+    def _resolve_texture_assets(self, variant):
+        assets = self._ensure_texture_assets(variant)
+        if assets["ok"]:
+            return assets
+
+        return {
+            "ok": False,
+            "paint_root": assets.get("paint_root"),
+            "paint_path": assets.get("paint_path"),
+            "delight_path": assets.get("delight_path"),
+            "required_paths": assets["required_paths"],
+            "error": assets.get("error"),
+            "downloaded": assets.get("downloaded", False),
+        }
+
+    def _probe_optional_module(self, checks, module_name):
+        try:
+            __import__(module_name)
+            checks.append({"name": module_name, "ok": True, "detail": "imported"})
+        except Exception as exc:
+            checks.append({"name": module_name, "ok": False, "detail": str(exc)})
+
+    def _texgen_runtime_strategy_lines(self):
+        return [
+            "Runtime prep follow-up (not auto-built here):",
+            "- xatlas: install a wheel compatible with this Python/platform, or build it from source if no Linux ARM64 wheel exists.",
+            "- custom_rasterizer + mesh_processor: build/install the Hunyuan3D texgen extensions for THIS exact Python ABI, platform/arch, Torch, and CUDA stack.",
+            "- Do NOT install x86_64 or Windows wheels on Linux ARM64.",
+            "- Shape-only requests remain safe because texgen deps stay lazy behind include_texture=true.",
+        ]
+
+    def _probe_texgen(self, variant):
+        checks = []
+        warnings = []
+        device = self._device
+
+        try:
+            import torch
+            cuda_ok = bool(torch.cuda.is_available())
+            device = "cuda" if cuda_ok else "cpu"
+            checks.append({
+                "name": "torch.cuda.is_available",
+                "ok": cuda_ok,
+                "detail": "resolved device=%s" % device,
+            })
+        except Exception as exc:
+            cuda_ok = False
+            checks.append({
+                "name": "torch import",
+                "ok": False,
+                "detail": str(exc),
+            })
+
+        paint_pipeline_class = None
+        try:
+            from hy3dgen.texgen import Hunyuan3DPaintPipeline
+
+            paint_pipeline_class = Hunyuan3DPaintPipeline
+            checks.append({
+                "name": "hy3dgen.texgen.Hunyuan3DPaintPipeline",
+                "ok": True,
+                "detail": "imported",
+            })
+        except Exception as exc:
+            checks.append({
+                "name": "hy3dgen.texgen.Hunyuan3DPaintPipeline",
+                "ok": False,
+                "detail": str(exc),
+            })
+
+        for module_name in ("xatlas", "custom_rasterizer", "mesh_processor"):
+            self._probe_optional_module(checks, module_name)
+
+        assets = self._resolve_texture_assets(variant)
+        if assets["ok"]:
+            checks.append({
+                "name": "local texture weights",
+                "ok": True,
+                "detail": "paint=%s delight=%s" % (assets["paint_path"], assets["delight_path"]),
+            })
+        else:
+            checks.append({
+                "name": "local texture weights",
+                "ok": False,
+                "detail": assets.get("error") or "missing texture assets",
+            })
+
+        ok = all(check["ok"] for check in checks)
+        return {
+            "ok": ok,
+            "device": device,
+            "variant": variant,
+            "paint_root": assets["paint_root"],
+            "required_paths": assets["required_paths"],
+            "checks": checks,
+            "warnings": warnings,
+            "paint_path": assets["paint_path"],
+            "delight_path": assets["delight_path"],
+            "paint_pipeline_class": paint_pipeline_class,
+        }
+
+    def _format_texgen_probe_error(self, probe):
+        failed = [
+            "- %s: %s" % (check["name"], check["detail"])
+            for check in probe["checks"]
+            if not check["ok"]
+        ]
+        missing_runtime_modules = [
+            check["name"]
+            for check in probe["checks"]
+            if not check["ok"] and check["name"] in {"xatlas", "custom_rasterizer", "mesh_processor"}
+        ]
+        hints = [
+            "Texture generation was explicitly requested but capability checks failed.",
+            "This extension manages texture assets only under its own model directory.",
+            "Install optional texgen runtime dependencies on a supported CUDA host and ensure the extension can access Hugging Face or that the required texture assets already exist locally.",
+            "Required local folders: root=%s | paint=%s | delight=%s"
+            % (
+                probe["required_paths"].get("root"),
+                probe["required_paths"].get("paint"),
+                probe["required_paths"].get("delight"),
+            ),
+        ]
+        if missing_runtime_modules:
+            hints.append("Current runtime dependency blockers: %s" % ", ".join(missing_runtime_modules))
+            hints.extend(self._texgen_runtime_strategy_lines())
+        return "\n".join(hints + failed)
+
+    def _prepare_hunyuanpaint_diffusers_compat(self):
+        try:
+            from hy3dgen.texgen.utils import multiview_utils
+        except Exception as exc:
+            raise RuntimeError("Unable to prepare HunyuanPaint diffusers compatibility patch: %s" % exc)
+
+        if getattr(multiview_utils, "_hunyuan3d2mv_diffusers_compat", False):
+            return
+
+        source_dir = Path(multiview_utils.__file__).resolve().parents[1] / "hunyuanpaint"
+        pipeline_src = source_dir / "pipeline.py"
+        modules_src = source_dir / "unet" / "modules.py"
+        missing = [str(path) for path in (pipeline_src, modules_src) if not path.exists()]
+        if missing:
+            raise RuntimeError(
+                "Unable to prepare HunyuanPaint diffusers compatibility patch; missing source files: %s"
+                % "; ".join(missing)
+            )
+
+        compat_dir = self._texgen_root() / "_runtime" / "hunyuanpaint_diffusers_compat"
+        compat_dir.mkdir(parents=True, exist_ok=True)
+        pipeline_text = pipeline_src.read_text(encoding="utf-8")
+        pipeline_text = pipeline_text.replace("from .unet.modules import", "from .modules import")
+        pipeline_text = pipeline_text.replace(
+            "from diffusers.callbacks import MultiPipelineCallbacks, PipelineCallback",
+            "try:\n"
+            "    from diffusers.callbacks import MultiPipelineCallbacks, PipelineCallback\n"
+            "except Exception:\n"
+            "    class PipelineCallback:\n"
+            "        tensor_inputs = []\n"
+            "    class MultiPipelineCallbacks:\n"
+            "        tensor_inputs = []",
+        )
+        modules_text = modules_src.read_text(encoding="utf-8")
+        modules_text = modules_text.replace(
+            "        self.is_turbo = is_turbo\n\n        # multiview attn",
+            "        self.is_turbo = is_turbo\n"
+            "\n"
+            "        if not hasattr(self.transformer, 'dim'):\n"
+            "            self.transformer.dim = self.attn1.to_q.in_features\n"
+            "        if not hasattr(self.transformer, 'num_attention_heads'):\n"
+            "            self.transformer.num_attention_heads = self.attn1.heads\n"
+            "        if not hasattr(self.transformer, 'attention_head_dim'):\n"
+            "            self.transformer.attention_head_dim = self.attn1.inner_dim // self.attn1.heads\n"
+            "        if not hasattr(self.transformer, 'dropout'):\n"
+            "            self.transformer.dropout = self.attn1.to_out[1].p if len(self.attn1.to_out) > 1 else 0.0\n"
+            "        if not hasattr(self.transformer, 'attention_bias'):\n"
+            "            self.transformer.attention_bias = self.attn1.to_q.bias is not None\n"
+            "\n"
+            "        # multiview attn",
+        )
+        modules_text = modules_text.replace(
+            "        unet_ckpt_path = os.path.join(pretrained_model_name_or_path, 'diffusion_pytorch_model.bin')\n"
+            "        with open(config_path, 'r', encoding='utf-8') as file:\n"
+            "            config = json.load(file)\n"
+            "        unet = UNet2DConditionModel(**config)\n"
+            "        unet = UNet2p5DConditionModel(unet)\n"
+            "        unet_ckpt = torch.load(unet_ckpt_path, map_location='cpu', weights_only=True)\n",
+            "        unet_ckpt_path = os.path.join(pretrained_model_name_or_path, 'diffusion_pytorch_model.bin')\n"
+            "        unet_safetensors_path = os.path.join(pretrained_model_name_or_path, 'diffusion_pytorch_model.safetensors')\n"
+            "        with open(config_path, 'r', encoding='utf-8') as file:\n"
+            "            config = json.load(file)\n"
+            "        unet = UNet2DConditionModel(**config)\n"
+            "        unet = UNet2p5DConditionModel(unet)\n"
+            "        if os.path.exists(unet_safetensors_path):\n"
+            "            from safetensors.torch import load_file\n"
+            "            unet_ckpt = load_file(unet_safetensors_path, device='cpu')\n"
+            "        else:\n"
+            "            unet_ckpt = torch.load(unet_ckpt_path, map_location='cpu', weights_only=True)\n",
+        )
+        modules_text = modules_text.replace("unet.load_state_dict(unet_ckpt, strict=True)", "unet.load_state_dict(unet_ckpt, strict=False)")
+        (compat_dir / "pipeline.py").write_text(pipeline_text, encoding="utf-8")
+        (compat_dir / "modules.py").write_text(modules_text, encoding="utf-8")
+
+        original_from_pretrained = multiview_utils.DiffusionPipeline.from_pretrained
+        source_dir_resolved = source_dir.resolve()
+
+        class _CompatDiffusionPipeline:
+            @staticmethod
+            def from_pretrained(*args, **kwargs):
+                custom_pipeline = kwargs.get("custom_pipeline")
+                if custom_pipeline:
+                    try:
+                        if Path(str(custom_pipeline)).resolve() == source_dir_resolved:
+                            kwargs["custom_pipeline"] = str(compat_dir)
+                            model_path = Path(str(args[0])) if args else None
+                            text_encoder_path = model_path / "text_encoder" if model_path is not None else None
+                            if text_encoder_path is not None and text_encoder_path.exists():
+                                has_text_encoder_weights = any(
+                                    (text_encoder_path / name).exists()
+                                    for name in (
+                                        "pytorch_model.bin",
+                                        "model.safetensors",
+                                        "tf_model.h5",
+                                        "model.ckpt.index",
+                                        "flax_model.msgpack",
+                                    )
+                                )
+                                if not has_text_encoder_weights:
+                                    standard_path = model_path.with_name(_TEXTURE_VARIANTS["standard"])
+                                    standard_text_encoder_path = standard_path / "text_encoder"
+                                    if standard_text_encoder_path.exists():
+                                        from transformers import CLIPTextModel
+
+                                        kwargs.setdefault(
+                                            "text_encoder",
+                                            CLIPTextModel.from_pretrained(
+                                                str(standard_text_encoder_path),
+                                                torch_dtype=kwargs.get("torch_dtype"),
+                                            ),
+                                        )
+                                    else:
+                                        kwargs.setdefault("text_encoder", None)
+                            vae_path = model_path / "vae" if model_path is not None else None
+                            if vae_path is not None and vae_path.exists():
+                                has_vae_weights = any(
+                                    (vae_path / name).exists()
+                                    for name in (
+                                        "diffusion_pytorch_model.bin",
+                                        "diffusion_pytorch_model.safetensors",
+                                        "model.safetensors",
+                                    )
+                                )
+                                if not has_vae_weights:
+                                    standard_path = model_path.with_name(_TEXTURE_VARIANTS["standard"])
+                                    standard_vae_path = standard_path / "vae"
+                                    if standard_vae_path.exists():
+                                        from diffusers import AutoencoderKL
+
+                                        kwargs.setdefault(
+                                            "vae",
+                                            AutoencoderKL.from_pretrained(
+                                                str(standard_vae_path),
+                                                torch_dtype=kwargs.get("torch_dtype"),
+                                            ),
+                                        )
+                    except Exception:
+                        pass
+                return original_from_pretrained(*args, **kwargs)
+
+        multiview_utils.DiffusionPipeline = _CompatDiffusionPipeline
+        multiview_utils._hunyuan3d2mv_diffusers_compat = True
+        print("[Hunyuan3D2mvGenerator] Prepared HunyuanPaint diffusers compatibility files at %s." % compat_dir)
+
+    def _load_paint_pipeline(self, probe):
+        variant = probe["variant"]
+        if self._paint_pipeline is not None and self._paint_variant == variant:
+            return self._paint_pipeline
+
+        paint_root_raw = probe.get("paint_root")
+        paint_path_raw = probe.get("paint_path")
+        delight_path_raw = probe.get("delight_path")
+        paint_root = Path(paint_root_raw) if paint_root_raw else None
+        paint_path = Path(paint_path_raw) if paint_path_raw else None
+        delight_path = Path(delight_path_raw) if delight_path_raw else None
+        paint_folder = _TEXTURE_VARIANTS.get(variant) or paint_path.name
+
+        missing_paths = []
+        for label, path in (("paint_root", paint_root), ("paint_path", paint_path), ("delight_path", delight_path)):
+            if path is None or not path.exists():
+                missing_paths.append("%s=%s" % (label, path))
+        if missing_paths:
+            raise RuntimeError(
+                "Unable to initialize Hunyuan3DPaintPipeline because required local texture assets are missing: %s"
+                % "; ".join(missing_paths)
+            )
+
+        PaintPipeline = probe.get("paint_pipeline_class")
+        if PaintPipeline is None:
+            from hy3dgen.texgen import Hunyuan3DPaintPipeline
+
+            PaintPipeline = Hunyuan3DPaintPipeline
+
+        self._prepare_hunyuanpaint_diffusers_compat()
+
+        if hasattr(PaintPipeline, "from_pretrained"):
+            try:
+                pipeline = PaintPipeline.from_pretrained(str(paint_root), subfolder=paint_folder)
+                self._paint_pipeline = pipeline
+                self._paint_variant = variant
+                print(
+                    "[Hunyuan3D2mvGenerator] Loaded texgen pipeline via from_pretrained(root, subfolder=%s)."
+                    % paint_folder
+                )
+                return pipeline
+            except Exception as exc:
+                raise RuntimeError(
+                    "Unable to initialize Hunyuan3DPaintPipeline from local assets. Use the Hunyuan3D-2 repo root as model_path and the paint folder name as subfolder; do not pass device/local_files_only/delight_model_path to from_pretrained. Tried paint_root=%s paint_path=%s delight_path=%s. Details: %s"
+                    % (paint_root, paint_path, delight_path, exc)
+                )
+
+        raise RuntimeError(
+            "Unable to initialize Hunyuan3DPaintPipeline because this hy3dgen.texgen implementation does not expose from_pretrained. Tried paint_root=%s paint_path=%s delight_path=%s."
+            % (paint_root, paint_path, delight_path)
+        )
+
+    def _select_texture_images(self, image_dict, mode):
+        front_image = image_dict["front"]
+        if mode == "front":
+            return [front_image]
+
+        ordered_views = [image_dict.get(name) for name in ("front", "left", "back", "right") if image_dict.get(name) is not None]
+        missing_sides = [name for name in ("left", "back", "right") if image_dict.get(name) is None]
+        if missing_sides:
+            print(
+                "[Hunyuan3D2mvGenerator] texture_input_mode=multiview requested but missing side views (%s); downgrading to front-only texturing."
+                % ", ".join(missing_sides)
+            )
+            return [front_image]
+
+        return ordered_views
+
+    def _texture_mesh(self, mesh, texture_images, paint_pipeline, texture_params, probe):
+        call_candidates = []
+        if hasattr(paint_pipeline, "paint"):
+            call_candidates.append(("paint", paint_pipeline.paint))
+        call_candidates.append(("__call__", paint_pipeline))
+
+        kwargs_candidates = [
+            {"images": texture_images},
+            {"image_list": texture_images},
+            {"image": texture_images[0]},
+        ]
+
+        errors = []
+        for method_name, method in call_candidates:
+            for kwargs in kwargs_candidates:
+                candidate_kwargs = dict(kwargs)
+                if method_name == "paint" and "image" in candidate_kwargs and len(texture_images) > 1:
+                    continue
+                try:
+                    result = method(mesh, **candidate_kwargs)
+                    textured_mesh = self._extract_textured_mesh(result)
+                    print(
+                        "[Hunyuan3D2mvGenerator] Textured mesh generated via %s with keys=%s for variant=%s mode=%s."
+                        % (method_name, sorted(candidate_kwargs.keys()), probe["variant"], texture_params["texture_input_mode"])
+                    )
+                    return textured_mesh
+                except TypeError as exc:
+                    errors.append("%s(%s): %s" % (method_name, ",".join(sorted(candidate_kwargs.keys())), exc))
+                except Exception as exc:
+                    errors.append("%s(%s): %s" % (method_name, ",".join(sorted(candidate_kwargs.keys())), exc))
+
+        raise RuntimeError("Texgen execution failed after shape generation. Details: %s" % " | ".join(errors))
+
+    def _extract_textured_mesh(self, result):
+        if result is None:
+            raise RuntimeError("Texgen returned no mesh")
+        if isinstance(result, (list, tuple)) and result:
+            return result[0]
+        if hasattr(result, "mesh") and result.mesh is not None:
+            return result.mesh
+        return result
+
+    def _validate_mesh(self, mesh):
         if mesh is None:
             raise RuntimeError("Generated mesh is None")
         if not hasattr(mesh, "vertices") or mesh.vertices is None or len(mesh.vertices) == 0:
@@ -306,13 +935,12 @@ class Hunyuan3D2mvGenerator(BaseGenerator):
 
         print("[Hunyuan3D2mvGenerator] Mesh validated: %d vertices, %d faces" % (len(mesh.vertices), len(mesh.faces)))
 
+    def _export_mesh(self, mesh):
         self.outputs_dir.mkdir(parents=True, exist_ok=True)
         out_path = self.outputs_dir / ("%d_%s.glb" % (int(time.time()), uuid.uuid4().hex[:8]))
         mesh.export(str(out_path))
         print("[Hunyuan3D2mvGenerator] Exported GLB to: %s" % out_path)
-
-        self._report(progress_cb, 100, "Done")
-        return str(out_path)
+        return out_path
 
     def _optional_view_image(self, params, view_name, remove_bg):
         path_key = "%s_image_path" % view_name

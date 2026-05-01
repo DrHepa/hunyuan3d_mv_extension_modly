@@ -3,7 +3,7 @@
   "name": "Hunyuan3D-2mv",
   "type": "model",
   "source": "https://github.com/iammojogo-sudo/hunyuan3d_mv_extension_modly",
-  "description": "Multi-view image-to-3D mesh generation using Tencent Hunyuan3D-2mv. Accepts front, left, back and right view images to reconstruct a detailed untextured mesh. Only the front view is required.",
+  "description": "Multi-view image-to-3D mesh generation using Tencent Hunyuan3D-2mv. Accepts front, left, back and right view images to reconstruct a detailed mesh. Outputs are untextured by default, with optional capability-gated texture generation when enabled. Only the front view is required.",
   "version": "1.0.0",
   "author": "Lightning Pixel",
   "vram_gb": 8,
@@ -17,10 +17,26 @@
       "id": "generate",
       "name": "Generate Mesh",
       "inputs": [
-        "image",
-        "image",
-        "image",
-        "image"
+        {
+          "name": "front",
+          "type": "image",
+          "required": true
+        },
+        {
+          "name": "left",
+          "type": "image",
+          "required": false
+        },
+        {
+          "name": "back",
+          "type": "image",
+          "required": false
+        },
+        {
+          "name": "right",
+          "type": "image",
+          "required": false
+        }
       ],
       "hf_repo": "tencent/Hunyuan3D-2mv",
       "download_check": "hunyuan3d-dit-v2-mv-turbo/model.fp16.safetensors",
@@ -197,6 +213,57 @@
             }
           ],
           "tooltip": "Run rembg before generation."
+        },
+        {
+          "id": "include_texture",
+          "label": "Generate Texture",
+          "type": "select",
+          "default": "false",
+          "options": [
+            {
+              "value": "false",
+              "label": "No"
+            },
+            {
+              "value": "true",
+              "label": "Yes"
+            }
+          ],
+          "tooltip": "Optionally run capability-gated texture generation after mesh generation."
+        },
+        {
+          "id": "texture_model_variant",
+          "label": "Texture Model Variant",
+          "type": "select",
+          "default": "turbo",
+          "options": [
+            {
+              "value": "turbo",
+              "label": "Turbo"
+            },
+            {
+              "value": "standard",
+              "label": "Standard"
+            }
+          ],
+          "tooltip": "Select the optional paint model variant used for texturing."
+        },
+        {
+          "id": "texture_input_mode",
+          "label": "Texture Input Mode",
+          "type": "select",
+          "default": "front",
+          "options": [
+            {
+              "value": "front",
+              "label": "Front Only"
+            },
+            {
+              "value": "multiview",
+              "label": "Multi-view"
+            }
+          ],
+          "tooltip": "Use only the front image or attempt texture generation from front/left/back/right views."
         },
         {
           "id": "left_image_path",
