@@ -10,10 +10,14 @@ json_args keys:
     gpu_sm         - GPU compute capability as integer (e.g. 89 for RTX 4050)
     cuda_version   - optional CUDA major/minor encoded as integer (e.g. 124, 128)
 """
+import io
 import json
+import os
 import platform
 import subprocess
 import sys
+import urllib.request
+import zipfile
 from pathlib import Path
 
 
@@ -58,6 +62,11 @@ ARM64_CU128_WHEELS = {
         "torchvision": "https://download-r2.pytorch.org/whl/cu128/torchvision-0.22.0-cp313-cp313-manylinux_2_28_aarch64.whl#sha256=e4d4d5a14225875d9bf8c5221d43d8be97786adc498659493799bdeff52c54cf",
     },
 }
+
+
+HUNYUAN3D_GITHUB_ZIP = "https://github.com/Tencent-Hunyuan/Hunyuan3D-2/archive/refs/heads/main.zip"
+HUNYUAN3D_ZIP_ROOT = "Hunyuan3D-2-main/"
+HUNYUAN3D_SOURCE_DIRNAME = "Hunyuan3D-2"
 
 
 def pip(venv, *args):
@@ -187,10 +196,40 @@ def install_xformers(venv, gpu_sm, is_linux_arm64):
         )
 
 
+def download_hy3dgen_source_from_github(ext_dir):
+    repo_dir = ext_dir / HUNYUAN3D_SOURCE_DIRNAME
+    if (repo_dir / "hy3dgen" / "texgen").exists():
+        print("[setup] Hunyuan3D-2 source already exists, skipping GitHub download.")
+        return repo_dir
+
+    repo_dir.mkdir(parents=True, exist_ok=True)
+    print("[setup] Downloading Hunyuan3D-2 source from GitHub for texgen native prep...")
+    with urllib.request.urlopen(HUNYUAN3D_GITHUB_ZIP, timeout=180) as response:
+        zip_bytes = response.read()
+
+    print("[setup] Extracting Hunyuan3D-2 source into %s ..." % repo_dir)
+    with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
+        for member in zf.namelist():
+            if not member.startswith(HUNYUAN3D_ZIP_ROOT) or member == HUNYUAN3D_ZIP_ROOT:
+                continue
+            rel = member[len(HUNYUAN3D_ZIP_ROOT):]
+            target = repo_dir / rel
+            if not target.resolve().is_relative_to(repo_dir.resolve()):
+                raise RuntimeError("Refusing unsafe path in Hunyuan3D-2 source archive: %s" % member)
+            if member.endswith("/"):
+                target.mkdir(parents=True, exist_ok=True)
+            else:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(zf.read(member))
+
+    if not (repo_dir / "hy3dgen" / "texgen" / "custom_rasterizer").exists():
+        raise RuntimeError("Downloaded Hunyuan3D-2 source is missing hy3dgen/texgen/custom_rasterizer.")
+    return repo_dir
+
+
 def prepare_hy3dgen_source(ext_dir, venv, is_linux_arm64):
     if is_linux_arm64:
-        print("[setup] Linux ARM64 will use lazy _hy3dgen source loading at runtime; skipping git clone/editable install.")
-        return
+        return download_hy3dgen_source_from_github(ext_dir)
 
     repo_dir = ext_dir / "Hunyuan3D-2"
     if not repo_dir.exists():
@@ -220,6 +259,84 @@ def prepare_hy3dgen_source(ext_dir, venv, is_linux_arm64):
     print("[setup] Installing hy3dgen package...")
     subprocess.run(
         [str(venv_python), "-m", "pip", "install", "-e", str(repo_dir)],
+        check=True,
+    )
+    return repo_dir
+
+
+def install_linux_arm64_texgen_setup_dependencies(venv):
+    print("[setup] Installing Linux ARM64 texgen setup dependency: patchelf...")
+    pip(venv, "install", "patchelf")
+
+
+def normalize_arch_list_for_texgen(gpu_sm):
+    gpu_sm = int(gpu_sm)
+    if gpu_sm == 121:
+        return "12.0+PTX"
+    major = gpu_sm // 10
+    minor = gpu_sm % 10
+    return "%d.%d" % (major, minor)
+
+
+def expected_cuda_home_candidates(pytorch_target, cuda_version):
+    candidates = []
+    if pytorch_target == "linux-arm64-cu128" or cuda_version >= 128:
+        candidates.append(Path("/usr/local/cuda-12.8"))
+    if pytorch_target == "linux-arm64-cu124" or cuda_version == 124:
+        candidates.append(Path("/usr/local/cuda-12.4"))
+    candidates.append(Path("/usr/local/cuda"))
+    return candidates
+
+
+def resolve_cuda_home_for_texgen(pytorch_target, cuda_version):
+    cuda_home = os.environ.get("CUDA_HOME")
+    cuda_path = os.environ.get("CUDA_PATH")
+    if cuda_home:
+        return None
+
+    expected_candidates = expected_cuda_home_candidates(pytorch_target, cuda_version)
+    specific_candidate = expected_candidates[0] if expected_candidates else None
+    generic_cuda_path = cuda_path and Path(cuda_path).expanduser().resolve() == Path("/usr/local/cuda").resolve()
+    if generic_cuda_path and specific_candidate and (specific_candidate / "bin" / "nvcc").exists():
+        print("[setup] CUDA_PATH points at generic /usr/local/cuda; selecting %s for texgen native prep." % specific_candidate)
+        return str(specific_candidate)
+    if cuda_path:
+        return None
+
+    for candidate in expected_candidates:
+        if (candidate / "bin" / "nvcc").exists():
+            print("[setup] Selecting %s for texgen native prep." % candidate)
+            return str(candidate)
+    return None
+
+
+def prepare_linux_arm64_texgen_runtime(ext_dir, venv, source_root, gpu_sm, cuda_version, pytorch_target):
+    script = ext_dir / "scripts" / "prepare_linux_arm64_texgen_runtime.py"
+    if not script.exists():
+        raise RuntimeError("Linux ARM64 texgen runtime prep script is missing: %s" % script)
+
+    arch_list = normalize_arch_list_for_texgen(gpu_sm)
+    env = os.environ.copy()
+    selected_cuda_home = resolve_cuda_home_for_texgen(pytorch_target, cuda_version)
+    if selected_cuda_home:
+        env["CUDA_HOME"] = selected_cuda_home
+        env["CUDA_PATH"] = selected_cuda_home
+
+    print("[setup] Preparing Linux ARM64 texgen native runtime (arch=%s)." % arch_list)
+    subprocess.run(
+        [
+            str(python_exe_in_venv(venv)),
+            str(script),
+            "--stage",
+            "all",
+            "--venv",
+            str(venv),
+            "--source-root",
+            str(source_root),
+            "--arch-list",
+            arch_list,
+        ],
+        env=env,
         check=True,
     )
 
@@ -274,11 +391,14 @@ def setup(python_exe, ext_dir, gpu_sm, cuda_version=0):
     print("[setup] Creating venv at %s ..." % venv)
     subprocess.run([python_exe, "-m", "venv", str(venv)], check=True)
 
-    install_pytorch(venv, gpu_sm, cuda_version, is_linux_arm64)
+    pytorch_target = install_pytorch(venv, gpu_sm, cuda_version, is_linux_arm64)
     install_xformers(venv, gpu_sm, is_linux_arm64)
-    prepare_hy3dgen_source(ext_dir, venv, is_linux_arm64)
+    source_root = prepare_hy3dgen_source(ext_dir, venv, is_linux_arm64)
     install_core_dependencies(venv)
     install_background_removal_dependencies(venv, gpu_sm, is_linux_arm64)
+    if is_linux_arm64:
+        install_linux_arm64_texgen_setup_dependencies(venv)
+        prepare_linux_arm64_texgen_runtime(ext_dir, venv, source_root, gpu_sm, cuda_version, pytorch_target)
 
     print("[setup] Done. Venv ready at: %s" % venv)
 

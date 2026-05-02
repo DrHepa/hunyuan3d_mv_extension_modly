@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Prepare optional Linux ARM64 texgen runtime pieces inside an existing venv.
+"""Prepare Linux ARM64 texgen runtime pieces inside an existing venv.
 
-This script is intentionally OPERATOR-ONLY. It does not change setup.py defaults
-and it refuses to touch global/system Python targets.
+setup.py invokes this on Linux ARM64 during normal extension install. Operators
+can also run it directly as a repair/debug tool; it refuses to touch
+global/system Python targets.
 """
 
 from __future__ import annotations
@@ -29,7 +30,7 @@ DEFAULT_SOURCE_CANDIDATES = (
 )
 SCRIPT_TEMP_ROOT = REPO_ROOT / ".texgen-runtime-prep"
 STAGES = ("inspect", "xatlas", "mesh_processor", "custom_rasterizer", "probe", "all")
-SUPPORTED_PYTHON_TAGS = {"cp312"}
+SUPPORTED_PYTHON_TAGS = {"cp39", "cp310", "cp311", "cp312", "cp313"}
 EXPECTED_TORCH_CUDA_SUFFIXES = {"cu128", "cu124"}
 BUILD_HELPERS = (
     "pip",
@@ -90,6 +91,7 @@ class PrepContext:
     nvcc_path: Optional[Path] = None
     nvcc_version: Optional[str] = None
     torch_lib_path: Optional[Path] = None
+    target_python_tag: Optional[str] = None
     site_packages: List[Path] = field(default_factory=list)
     patchelf_path: Optional[Path] = None
     custom_rasterizer_kernels: List[Path] = field(default_factory=list)
@@ -228,10 +230,11 @@ def detect_python_tag(ctx: PrepContext) -> Optional[str]:
         add_refusal(ctx, "Unable to query target venv Python version.")
         return None
     py_tag = result.stdout.strip()
+    ctx.target_python_tag = py_tag
     ok = py_tag in SUPPORTED_PYTHON_TAGS
     add_check(ctx, "target-python", ok, f"detected {py_tag}; supported={sorted(SUPPORTED_PYTHON_TAGS)}")
     if not ok:
-        add_refusal(ctx, f"Unsupported Python ABI {py_tag}. This workflow currently targets cp312 only.")
+        add_refusal(ctx, f"Unsupported Python ABI {py_tag}. Supported tags: {', '.join(sorted(SUPPORTED_PYTHON_TAGS))}.")
     return py_tag
 
 
@@ -588,8 +591,9 @@ def validate_artifact(ctx: PrepContext, label: str, path: Optional[Path], requir
         add_refusal(ctx, f"{label} artifact is incompatible with Linux ARM64: {path.name}")
         return
     if path.suffix == ".whl":
-        if "cp312" not in name:
-            add_refusal(ctx, f"{label} wheel must target cp312 for this workflow: {path.name}")
+        target_python_tag = ctx.target_python_tag
+        if target_python_tag and target_python_tag not in name:
+            add_refusal(ctx, f"{label} wheel must target {target_python_tag} for this workflow: {path.name}")
         if platform_hint not in {"aarch64", "unknown"}:
             add_refusal(ctx, f"{label} wheel does not look like Linux ARM64/aarch64: {path.name}")
     if requires_torch_runtime_hint:
@@ -705,7 +709,8 @@ def final_probe_plan(ctx: PrepContext) -> CommandPlan:
 
 def selected_arch_list(ctx: PrepContext) -> Optional[str]:
     arch_list = ctx.arch_list or ctx.detected_sm
-    if arch_list == "12.1":
+    normalized_input = str(arch_list or "").strip().lower().replace("sm_", "")
+    if normalized_input in {"12.1", "121"}:
         normalized = "12.0+PTX"
         ctx.warnings.append(
             "TORCH_CUDA_ARCH_LIST=12.1 is rejected by the target Torch 2.7.0+cu128 toolchain; using 12.0+PTX instead."

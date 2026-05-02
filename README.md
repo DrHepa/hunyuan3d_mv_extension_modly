@@ -89,7 +89,7 @@ You need ALL of the following:
 - CUDA userspace/driver compatible with **CUDA 12.4** or **CUDA 12.8** wheels
 - Network access to:
   - Hugging Face model downloads
-  - GitHub zip download for lazy `_hy3dgen` source extraction
+  - GitHub zip download for Hunyuan3D-2 source extraction during extension install
 - A Modly install that can create the extension venv
 
 ## Install Behavior
@@ -102,8 +102,9 @@ The installer uses an explicit Linux ARM64 branch:
 - does **not** require `xformers`
 - installs `rembg` + CPU `onnxruntime`
 - does **not** require `onnxruntime-gpu`
-- does **not** clone/install `Hunyuan3D-2` editable during setup
-- lazily downloads/extracts `_hy3dgen` source on first runtime import if needed
+- downloads/extracts the upstream `Hunyuan3D-2` GitHub source zip into the extension directory
+- prepares Linux ARM64 texgen native runtime pieces during setup by running `scripts/prepare_linux_arm64_texgen_runtime.py --stage all`
+- patches `custom_rasterizer` RUNPATH for the target venv Torch `lib/` directory and selected CUDA `lib64`
 
 Pinned Torch targets:
 
@@ -111,6 +112,8 @@ Pinned Torch targets:
 - **cu128 / Blackwell-tier path**: `torch==2.7.0+cu128`, `torchvision==0.22.0`
 
 If a pinned ARM64 wheel is unavailable for the embedded Python tag, setup fails clearly instead of silently downgrading.
+
+Texture generation is still opt-in at request time (`include_texture=false` remains the default), but the GitHub install path prepares the native runtime needed for advertised texture functionality. After the model weights are downloaded, users should not need a separate runtime-prep command before trying `include_texture=true` on a supported Linux ARM64 CUDA host.
 
 ### Windows / non-ARM64
 
@@ -130,7 +133,7 @@ The prior behavior is intentionally preserved as much as possible:
 2. extension-local `Hunyuan3D-2/`
 3. model cache `_hy3dgen/`
 
-On Linux ARM64, if `_hy3dgen` is missing, the generator downloads the upstream GitHub zip and extracts only the `hy3dgen/` tree into the model cache.
+On Linux ARM64, normal setup provides extension-local `Hunyuan3D-2/` source for both shape and texgen imports. The `_hy3dgen` model-cache download remains only as a fallback if the extension-local source is missing.
 
 Background removal behavior:
 
@@ -161,16 +164,16 @@ When `include_texture=true`, the generator probes texgen readiness BEFORE textur
 
 If any check fails, the request raises an actionable error. It does NOT silently return an untextured mesh when texture was explicitly requested.
 
-### Required Extra Dependencies
+### Native Runtime Dependencies
 
-Texgen is NOT added to `setup.py` in this first cut. That is intentional to avoid regressing the working shape path.
-
-For a supported CUDA host, operators must provide the optional texgen runtime separately, including at minimum:
+On Linux ARM64, GitHub install now prepares the texgen native runtime inside the extension venv, including at minimum:
 
 - `xatlas`
 - `custom_rasterizer`
 - `mesh_processor`
 - a `hy3dgen` installation/source tree that includes `hy3dgen.texgen`
+
+If native prep cannot complete, setup fails clearly instead of silently installing a shape-only environment that later breaks when `include_texture=true` is requested.
 
 ### Required Local Weights
 
@@ -182,23 +185,23 @@ Texgen uses local assets from `tencent/Hunyuan3D-2`, not the existing `tencent/H
 
 If that download cannot complete because of missing network access, authentication/token issues, or incomplete upstream files, the request fails clearly and points to the extension-owned target path.
 
-## Linux ARM64 Runtime Prep (Opt-in)
+## Linux ARM64 Runtime Prep (Repair/Debug Tool)
 
-This is the SAFE boundary for experimental texgen runtime prep on Linux ARM64. `setup.py` remains shape-only by design. If you want optional textured output on Linux ARM64, do it explicitly with the runtime-prep script and DRY-RUN FIRST.
+Normal GitHub install runs this prep automatically on Linux ARM64. The script remains available as a repair, debug, and manual recovery tool when an install was interrupted, CUDA paths changed, or native artifacts need to be inspected. For manual use, DRY-RUN FIRST.
 
 ### Defaults and targeting
 
 - Default target venv: `./venv`
 - Override the target explicitly with `--venv /absolute/path/to/venv` if Modly installed the extension elsewhere.
 - The script refuses non-venv/global Python targets.
-- The script never clones/downloads Hunyuan3D source; pass `--source-root /path/to/Hunyuan3D-2` when mesh/custom texgen sources are needed.
+- The script never clones/downloads Hunyuan3D source; normal setup provides `./Hunyuan3D-2`, or pass `--source-root /path/to/Hunyuan3D-2` when mesh/custom texgen sources are needed.
 - Prefer an explicit CUDA home that matches the target Torch runtime, for example `CUDA_HOME=/usr/local/cuda-12.8`, instead of relying on a generic `PATH`/`/usr/local/cuda` symlink that may point at a different CUDA version.
 
 ### What the script checks before mutation
 
 - Linux `aarch64` / `arm64`
 - target venv exists and contains `pyvenv.cfg`, `bin/python`, `bin/pip`
-- target Python ABI is `cp312`
+- target Python ABI is one of the Linux ARM64 pinned Torch wheel tags (`cp39`, `cp310`, `cp311`, `cp312`, `cp313`)
 - target venv can import Torch and reports a supported CUDA suffix (`cu124` or `cu128`)
 - `CUDA_HOME` / `nvcc`
 - GPU SM / compute capability
@@ -321,15 +324,15 @@ Then let Modly recreate the extension venv and re-run the script in `--dry-run` 
 
 ### Final smoke guidance
 
-1. Dry-run the full plan first.
-2. Run the required mutating stages one by one, stopping after the first failure.
-3. Confirm the final probe imports:
+1. After normal install, confirm the final probe imports:
 
 ```bash
 env -u LD_LIBRARY_PATH venv/bin/python -c "import xatlas, mesh_processor, custom_rasterizer; from hy3dgen.texgen import Hunyuan3DPaintPipeline"
 ```
 
-4. Only AFTER the probe passes, run one manual `include_texture=true` smoke request.
+2. Only AFTER the probe passes, run one manual `include_texture=true` smoke request.
+
+If normal install did not complete, use the repair/debug script in dry-run mode first, then run required mutating stages one by one, stopping after the first failure.
 
 Do NOT claim stable Linux ARM64 texgen support from a successful probe alone. A textured smoke run is still required.
 
