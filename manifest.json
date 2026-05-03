@@ -3,7 +3,7 @@
   "name": "Hunyuan3D-2mv",
   "type": "model",
   "source": "https://github.com/iammojogo-sudo/hunyuan3d_mv_extension_modly",
-  "description": "Multi-view image-to-3D mesh generation using Tencent Hunyuan3D-2mv. Accepts front, left, back and right view images to reconstruct a detailed mesh. Outputs are untextured by default, with optional capability-gated texture generation when enabled. Only the front view is required.",
+  "description": "Multi-view image-to-3D mesh generation using Tencent Hunyuan3D-2mv. Generate Shape Mesh exports geometry, while Texture Mesh applies Hunyuan3D paint to an existing routed mesh without regenerating shape.",
   "version": "1.0.0",
   "author": "Lightning Pixel",
   "vram_gb": 8,
@@ -14,8 +14,8 @@
   ],
   "nodes": [
     {
-      "id": "generate",
-      "name": "Generate Mesh",
+      "id": "generate-shape",
+      "name": "Generate Shape Mesh",
       "inputs": [
         {
           "name": "front",
@@ -40,6 +40,7 @@
       ],
       "hf_repo": "tencent/Hunyuan3D-2mv",
       "download_check": "hunyuan3d-dit-v2-mv-turbo/model.fp16.safetensors",
+      "weight_owner_id": "generate",
       "hf_skip_prefixes": [
         "hunyuan3d-dit-v2-mv/model.fp16.ckpt",
         "hunyuan3d-dit-v2-mv-turbo/model.fp16.ckpt",
@@ -52,20 +53,11 @@
           "type": "select",
           "default": "hunyuan3d-dit-v2-mv-turbo",
           "options": [
-            {
-              "value": "hunyuan3d-dit-v2-mv-turbo",
-              "label": "Turbo"
-            },
-            {
-              "value": "hunyuan3d-dit-v2-mv-fast",
-              "label": "Fast"
-            },
-            {
-              "value": "hunyuan3d-dit-v2-mv",
-              "label": "Standard"
-            }
+            { "value": "hunyuan3d-dit-v2-mv-turbo", "label": "Turbo" },
+            { "value": "hunyuan3d-dit-v2-mv-fast", "label": "Fast" },
+            { "value": "hunyuan3d-dit-v2-mv", "label": "Standard" }
           ],
-          "tooltip": "Select the model variant for mesh generation."
+          "tooltip": "Select the model variant for shape mesh generation."
         },
         {
           "id": "num_inference_steps",
@@ -73,18 +65,9 @@
           "type": "select",
           "default": 30,
           "options": [
-            {
-              "value": 10,
-              "label": "Fast (10)"
-            },
-            {
-              "value": 30,
-              "label": "Balanced (30)"
-            },
-            {
-              "value": 50,
-              "label": "Quality (50)"
-            }
+            { "value": 10, "label": "Fast (10)" },
+            { "value": 30, "label": "Balanced (30)" },
+            { "value": 50, "label": "Quality (50)" }
           ],
           "tooltip": "Number of diffusion steps."
         },
@@ -94,18 +77,9 @@
           "type": "select",
           "default": 380,
           "options": [
-            {
-              "value": 256,
-              "label": "Low (256)"
-            },
-            {
-              "value": 380,
-              "label": "Medium (380)"
-            },
-            {
-              "value": 512,
-              "label": "High (512)"
-            }
+            { "value": 256, "label": "Low (256)" },
+            { "value": 380, "label": "Medium (380)" },
+            { "value": 512, "label": "High (512)" }
           ],
           "tooltip": "Octree resolution. Higher values use more VRAM."
         },
@@ -115,22 +89,10 @@
           "type": "select",
           "default": "5.0",
           "options": [
-            {
-              "value": "1.0",
-              "label": "Loose (1.0)"
-            },
-            {
-              "value": "5.0",
-              "label": "Default (5.0)"
-            },
-            {
-              "value": "7.5",
-              "label": "Strong (7.5)"
-            },
-            {
-              "value": "10.0",
-              "label": "Tight (10.0)"
-            }
+            { "value": "1.0", "label": "Loose (1.0)" },
+            { "value": "5.0", "label": "Default (5.0)" },
+            { "value": "7.5", "label": "Strong (7.5)" },
+            { "value": "10.0", "label": "Tight (10.0)" }
           ],
           "tooltip": "Classifier-free guidance strength."
         },
@@ -140,18 +102,9 @@
           "type": "select",
           "default": 8000,
           "options": [
-            {
-              "value": 2000,
-              "label": "Low VRAM (2000)"
-            },
-            {
-              "value": 8000,
-              "label": "Balanced (8000)"
-            },
-            {
-              "value": 20000,
-              "label": "Fast (20000)"
-            }
+            { "value": 2000, "label": "Low VRAM (2000)" },
+            { "value": 8000, "label": "Balanced (8000)" },
+            { "value": 20000, "label": "Fast (20000)" }
           ],
           "tooltip": "VAE decode chunk size. Lower values reduce VRAM usage."
         },
@@ -161,18 +114,9 @@
           "type": "select",
           "default": "1.01",
           "options": [
-            {
-              "value": "0.75",
-              "label": "Small (0.75)"
-            },
-            {
-              "value": "1.01",
-              "label": "Default (1.01)"
-            },
-            {
-              "value": "1.25",
-              "label": "Large (1.25)"
-            }
+            { "value": "0.75", "label": "Small (0.75)" },
+            { "value": "1.01", "label": "Default (1.01)" },
+            { "value": "1.25", "label": "Large (1.25)" }
           ],
           "tooltip": "Increase if mesh edges are clipped."
         },
@@ -182,18 +126,9 @@
           "type": "select",
           "default": "0.0",
           "options": [
-            {
-              "value": "-0.05",
-              "label": "Thicker (-0.05)"
-            },
-            {
-              "value": "0.0",
-              "label": "Default (0.0)"
-            },
-            {
-              "value": "0.05",
-              "label": "Thinner (0.05)"
-            }
+            { "value": "-0.05", "label": "Thicker (-0.05)" },
+            { "value": "0.0", "label": "Default (0.0)" },
+            { "value": "0.05", "label": "Thinner (0.05)" }
           ],
           "tooltip": "Marching-cubes iso-surface level."
         },
@@ -203,67 +138,10 @@
           "type": "select",
           "default": "true",
           "options": [
-            {
-              "value": "true",
-              "label": "Yes"
-            },
-            {
-              "value": "false",
-              "label": "No"
-            }
+            { "value": "true", "label": "Yes" },
+            { "value": "false", "label": "No" }
           ],
-          "tooltip": "Run rembg before generation."
-        },
-        {
-          "id": "include_texture",
-          "label": "Generate Texture",
-          "type": "select",
-          "default": "false",
-          "options": [
-            {
-              "value": "false",
-              "label": "No"
-            },
-            {
-              "value": "true",
-              "label": "Yes"
-            }
-          ],
-          "tooltip": "Optionally run capability-gated texture generation after mesh generation."
-        },
-        {
-          "id": "texture_model_variant",
-          "label": "Texture Model Variant",
-          "type": "select",
-          "default": "turbo",
-          "options": [
-            {
-              "value": "turbo",
-              "label": "Turbo"
-            },
-            {
-              "value": "standard",
-              "label": "Standard"
-            }
-          ],
-          "tooltip": "Select the optional paint model variant used for texturing."
-        },
-        {
-          "id": "texture_input_mode",
-          "label": "Texture Input Mode",
-          "type": "select",
-          "default": "front",
-          "options": [
-            {
-              "value": "front",
-              "label": "Front Only"
-            },
-            {
-              "value": "multiview",
-              "label": "Multi-view"
-            }
-          ],
-          "tooltip": "Use only the front image or attempt texture generation from front/left/back/right views."
+          "tooltip": "Run rembg before shape generation."
         },
         {
           "id": "left_image_path",
@@ -271,17 +149,7 @@
           "type": "string",
           "default": "",
           "pickerIntent": "image",
-          "filters": [
-            {
-              "name": "Images",
-              "extensions": [
-                "png",
-                "jpg",
-                "jpeg",
-                "webp"
-              ]
-            }
-          ],
+          "filters": [{ "name": "Images", "extensions": ["png", "jpg", "jpeg", "webp"] }],
           "tooltip": "Optional left-side view image path."
         },
         {
@@ -290,17 +158,7 @@
           "type": "string",
           "default": "",
           "pickerIntent": "image",
-          "filters": [
-            {
-              "name": "Images",
-              "extensions": [
-                "png",
-                "jpg",
-                "jpeg",
-                "webp"
-              ]
-            }
-          ],
+          "filters": [{ "name": "Images", "extensions": ["png", "jpg", "jpeg", "webp"] }],
           "tooltip": "Optional back view image path."
         },
         {
@@ -309,17 +167,7 @@
           "type": "string",
           "default": "",
           "pickerIntent": "image",
-          "filters": [
-            {
-              "name": "Images",
-              "extensions": [
-                "png",
-                "jpg",
-                "jpeg",
-                "webp"
-              ]
-            }
-          ],
+          "filters": [{ "name": "Images", "extensions": ["png", "jpg", "jpeg", "webp"] }],
           "tooltip": "Optional right-side view image path."
         },
         {
@@ -330,6 +178,156 @@
           "min": 0,
           "max": 4294967295,
           "tooltip": "Change if result is unsatisfying."
+        }
+      ],
+      "output": "mesh",
+      "input": "image"
+    },
+    {
+      "id": "texture-mesh",
+      "name": "Texture Mesh",
+      "inputs": [
+        {
+          "name": "front",
+          "type": "image",
+          "required": true
+        },
+        {
+          "name": "mesh",
+          "type": "mesh",
+          "required": true
+        },
+        {
+          "name": "left",
+          "type": "image",
+          "required": false
+        },
+        {
+          "name": "back",
+          "type": "image",
+          "required": false
+        },
+        {
+          "name": "right",
+          "type": "image",
+          "required": false
+        }
+      ],
+      "hf_repo": "tencent/Hunyuan3D-2mv",
+      "download_check": "hunyuan3d-dit-v2-mv-turbo/model.fp16.safetensors",
+      "weight_owner_id": "generate",
+      "hf_skip_prefixes": [
+        "hunyuan3d-dit-v2-mv/model.fp16.ckpt",
+        "hunyuan3d-dit-v2-mv-turbo/model.fp16.ckpt",
+        "hunyuan3d-dit-v2-mv-fast/model.fp16.ckpt"
+      ],
+      "params_schema": [
+        {
+          "id": "texture_model_variant",
+          "label": "Texture Model Variant",
+          "type": "select",
+          "default": "turbo",
+          "options": [
+            { "value": "turbo", "label": "Turbo" },
+            { "value": "standard", "label": "Standard (High quality / very slow)" }
+          ],
+          "tooltip": "Select the paint model variant used for texturing. Turbo is the default. Standard is high quality but can be very slow, especially with 2048 sizes and 6 views."
+        },
+        {
+          "id": "texture_inference_steps",
+          "label": "Texture Inference Steps",
+          "type": "select",
+          "default": 30,
+          "options": [
+            { "value": 8, "label": "Preview (8)" },
+            { "value": 15, "label": "Fast (15)" },
+            { "value": 30, "label": "Quality (30)" }
+          ],
+          "tooltip": "Diffusion steps for the texture multiview pass. Lower values are faster; 30 is highest quality and can be very slow with Standard."
+        },
+        {
+          "id": "texture_render_size",
+          "label": "Texture Render Size",
+          "type": "select",
+          "default": 2048,
+          "options": [
+            { "value": 512, "label": "Fast (512)" },
+            { "value": 1024, "label": "Balanced (1024)" },
+            { "value": 2048, "label": "Quality (2048)" }
+          ],
+          "tooltip": "Internal render size for texturing. 2048 gives higher quality but can be slow."
+        },
+        {
+          "id": "texture_texture_size",
+          "label": "Texture Atlas Size",
+          "type": "select",
+          "default": 2048,
+          "options": [
+            { "value": 512, "label": "Fast (512)" },
+            { "value": 1024, "label": "Balanced (1024)" },
+            { "value": 2048, "label": "Quality (2048)" }
+          ],
+          "tooltip": "Output texture atlas size. 2048 gives higher detail but can be slow and memory-heavy."
+        },
+        {
+          "id": "texture_view_count",
+          "label": "Texture View Count",
+          "type": "select",
+          "default": 6,
+          "options": [
+            { "value": 4, "label": "Faster (4 views, if supported)" },
+            { "value": 6, "label": "Quality (6 views)" }
+          ],
+          "tooltip": "Number of generated texture views. 6 gives better coverage; 4 is faster when supported."
+        },
+        {
+          "id": "texture_input_mode",
+          "label": "Texture Input Mode",
+          "type": "select",
+          "default": "front",
+          "options": [
+            { "value": "front", "label": "Front Only" },
+            { "value": "multiview", "label": "Multi-view" }
+          ],
+          "tooltip": "Use only the front image or attempt texture generation from front/left/back/right views."
+        },
+        {
+          "id": "remove_bg",
+          "label": "Remove Background",
+          "type": "select",
+          "default": "true",
+          "options": [
+            { "value": "true", "label": "Yes" },
+            { "value": "false", "label": "No" }
+          ],
+          "tooltip": "Run rembg on reference image(s) before texturing."
+        },
+        {
+          "id": "left_image_path",
+          "label": "Left View Image",
+          "type": "string",
+          "default": "",
+          "pickerIntent": "image",
+          "filters": [{ "name": "Images", "extensions": ["png", "jpg", "jpeg", "webp"] }],
+          "tooltip": "Optional left-side reference image path."
+        },
+        {
+          "id": "back_image_path",
+          "label": "Back View Image",
+          "type": "string",
+          "default": "",
+          "pickerIntent": "image",
+          "filters": [{ "name": "Images", "extensions": ["png", "jpg", "jpeg", "webp"] }],
+          "tooltip": "Optional back reference image path."
+        },
+        {
+          "id": "right_image_path",
+          "label": "Right View Image",
+          "type": "string",
+          "default": "",
+          "pickerIntent": "image",
+          "filters": [{ "name": "Images", "extensions": ["png", "jpg", "jpeg", "webp"] }],
+          "tooltip": "Optional right-side reference image path."
         }
       ],
       "output": "mesh",

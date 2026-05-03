@@ -78,7 +78,7 @@ Hardware and performance notes:
 - **VRAM**: 6 GB minimum, 8 GB or more recommended.
 - **Efficiency**: the Turbo model is more memory-efficient than Standard.
 - **Multi-image inputs**: until Modly core maps model inputs by `targetHandle`, connected workflow images can still collapse to one primary front image. The extension accepts optional side views when Modly passes `left_image_path`, `back_image_path`, and `right_image_path` params.
-- **Optional texgen**: shape generation remains the default. Texture generation is opt-in via `include_texture=true` and is capability-gated at runtime.
+- **Texture workflow**: shape and texture are separate nodes. `Generate Shape Mesh` exports geometry; `Texture Mesh` consumes a routed mesh input plus reference image(s) and is capability-gated at runtime.
 
 ## Linux ARM64 Prerequisites
 
@@ -113,7 +113,7 @@ Pinned Torch targets:
 
 If a pinned ARM64 wheel is unavailable for the embedded Python tag, setup fails clearly instead of silently downgrading.
 
-Texture generation is still opt-in at request time (`include_texture=false` remains the default), but the GitHub install path prepares the native runtime needed for advertised texture functionality. After the model weights are downloaded, users should not need a separate runtime-prep command before trying `include_texture=true` on a supported Linux ARM64 CUDA host.
+Texture generation is still opt-in through the separate `Texture Mesh` node, but the GitHub install path prepares the native runtime needed for advertised texture functionality. After the model weights are downloaded, users should not need a separate runtime-prep command before trying the texture node on a supported Linux ARM64 CUDA host.
 
 ### Windows / non-ARM64
 
@@ -143,17 +143,30 @@ Background removal behavior:
 
 Before export, generated meshes are validated for non-empty vertices and faces so failed generations stop with a clear error instead of exporting an invalid GLB.
 
-## Optional Texture Generation (First Cut)
+## Shape and Texture Workflow
 
-This repository now exposes an OPTIONAL texture path after shape generation:
+This repository exposes two Modly model nodes:
 
-- `include_texture=false` by default, so existing shape-only requests remain unchanged.
-- `texture_model_variant`: `turbo` or `standard`
+- `Generate Shape Mesh` (`hunyuan3d2mv/generate-shape`) creates an untextured GLB mesh from the front image and optional side views.
+- `Texture Mesh` (`hunyuan3d2mv/texture-mesh`) applies texture to an existing mesh from a required routed `mesh` input plus reference image(s), without rerunning shape generation.
+
+Texture node params:
+
+- `texture_model_variant`: `turbo` (default) or `standard` (**high quality / very slow**)
 - `texture_input_mode`: `front` or `multiview`
+- `texture_inference_steps`: texture multiview diffusion steps; `30` preserves upstream behavior, while lower options trade quality for speed
+- `texture_render_size`: internal texture render size; defaults to `2048`, with `512`/`1024` available for faster previews
+- `texture_texture_size`: output texture atlas size; defaults to `2048`, with `512`/`1024` available for faster previews
+- `texture_view_count`: defaults to upstream `6`; `4` is available only when the installed paint config exposes mutable camera/view lists
+- `remove_bg`: controls reference image background removal before texturing
+
+Performance warning: `standard` + `texture_render_size=2048` + `texture_texture_size=2048` + `texture_view_count=6` can be VERY slow because it keeps the full upstream quality path. Use `turbo` and lower steps/sizes/views for quick iteration, then raise quality only for final texture passes.
+
+The mesh is provided by workflow routing. Connect a shape/output mesh edge into the texture node's required `mesh` port; Modly injects that route as `params.mesh_path`. There is intentionally no primary manual `mesh_path` picker/string in the texture node UI. Hidden legacy `include_texture=true` may still work only for programmatic compatibility on shape dispatch, but the preferred workflow is the two-node graph.
 
 ### Capability Gate
 
-When `include_texture=true`, the generator probes texgen readiness BEFORE texturing:
+When `Texture Mesh` starts, the generator validates the routed mesh and probes texgen readiness BEFORE texturing:
 
 - CUDA availability
 - `hy3dgen.texgen.Hunyuan3DPaintPipeline`
@@ -162,7 +175,7 @@ When `include_texture=true`, the generator probes texgen readiness BEFORE textur
 - `mesh_processor`
 - local paint/delight weight folders
 
-If any check fails, the request raises an actionable error. It does NOT silently return an untextured mesh when texture was explicitly requested.
+If mesh routing is missing/invalid, the request fails as a mesh input problem before probing texgen. If any texgen readiness check fails, the request raises an actionable texture runtime/assets error. It does NOT silently return an untextured mesh when texture was explicitly requested.
 
 ### Native Runtime Dependencies
 
@@ -330,7 +343,7 @@ Then let Modly recreate the extension venv and re-run the script in `--dry-run` 
 env -u LD_LIBRARY_PATH venv/bin/python -c "import xatlas, mesh_processor, custom_rasterizer; from hy3dgen.texgen import Hunyuan3DPaintPipeline"
 ```
 
-2. Only AFTER the probe passes, run one manual `include_texture=true` smoke request.
+2. Only AFTER the probe passes, run one manual `Texture Mesh` smoke request using a routed mesh edge.
 
 If normal install did not complete, use the repair/debug script in dry-run mode first, then run required mutating stages one by one, stopping after the first failure.
 
@@ -354,23 +367,28 @@ Do NOT build anything for this checklist.
 
 ### Texgen Smoke Checklist
 
-1. **Shape-only default**
-   - Run one normal request with default params.
-   - Confirm the result is the same shape-only GLB path and that no texgen capability failure appears.
+1. **Shape node default**
+   - Run `Generate Shape Mesh` with default params.
+   - Confirm the result is an untextured shape GLB and that no texgen capability failure appears.
 
-2. **Explicit probe-failure path**
-   - Set `include_texture=true` on a host missing CUDA/texgen deps/weights or without valid Hugging Face access.
-   - Confirm the run fails with an actionable probe error listing the failed check(s), including `xatlas`, `custom_rasterizer`, and `mesh_processor` when they are the blockers, plus the required local paths.
+2. **Missing routed mesh path**
+   - Start `Texture Mesh` without connecting the required mesh input.
+   - Confirm Modly blocks the workflow for the missing required mesh edge or the extension fails immediately with a missing routed mesh input error.
 
-3. **Supported CUDA texture success**
-   - On a host with CUDA, `hy3dgen.texgen`, `xatlas`, `custom_rasterizer`, `mesh_processor`, and local `tencent/Hunyuan3D-2` paint/delight weights, run one request with:
-     - `include_texture=true`
-     - `texture_model_variant=turbo`
-     - `texture_input_mode=front`
-   - Confirm the final artifact is a textured GLB.
+3. **Explicit texture readiness failure path**
+   - Connect a valid mesh to `Texture Mesh` on a host missing CUDA/texgen deps/weights or without valid Hugging Face access.
+   - Confirm the run fails with an actionable texture runtime/assets error listing the failed check(s), including `xatlas`, `custom_rasterizer`, and `mesh_processor` when they are blockers, plus the required local paths.
 
-4. **Named-input validation after manifest update**
-   - In Modly UI/workflow wiring, confirm inputs remain named `front`, `left`, `back`, and `right` after the new texture params are added.
+4. **Supported CUDA texture success**
+   - On a host with CUDA, `hy3dgen.texgen`, `xatlas`, `custom_rasterizer`, `mesh_processor`, and local `tencent/Hunyuan3D-2` paint/delight weights, connect a generated or loaded mesh to `Texture Mesh` and run with:
+      - `texture_model_variant=turbo`
+      - `texture_input_mode=front`
+      - optional faster preview controls such as `texture_inference_steps=15`, `texture_render_size=1024`, `texture_texture_size=1024`
+   - Confirm the final artifact is a textured GLB and shape generation is not repeated.
+   - For final quality, `standard` with 2048 render size, 2048 texture size, and 6 views is allowed but can be very slow; do not use that combination as a quick smoke default.
+
+5. **Named-input validation after manifest update**
+   - In Modly UI/workflow wiring, confirm shape inputs remain named `front`, `left`, `back`, and `right`, and texture exposes a required `mesh` input plus reference image inputs.
 
 ### 1. Verify install package choices
 

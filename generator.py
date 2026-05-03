@@ -13,6 +13,7 @@ import platform
 import sys
 import threading
 import time
+import textwrap
 import urllib.request
 import uuid
 import zipfile
@@ -53,6 +54,10 @@ _TEXTURE_VARIANTS = {
 }
 
 _TEXTURE_INPUT_MODES = {"front", "multiview"}
+_TEXTURE_INFERENCE_STEP_OPTIONS = {8, 15, 30}
+_TEXTURE_SIZE_OPTIONS = {512, 1024, 2048}
+_TEXTURE_VIEW_COUNT_OPTIONS = {4, 6}
+_SUPPORTED_MESH_EXTENSIONS = {".glb", ".gltf", ".obj", ".ply", ".stl"}
 
 
 def _safe_float(val, default):
@@ -90,6 +95,15 @@ def _safe_choice(val, allowed, default, label):
         text = val.strip().lower()
         if text in allowed:
             return text
+    if val not in (None, ""):
+        print("[Hunyuan3D2mvGenerator] Invalid %s=%r, using default %r." % (label, val, default))
+    return default
+
+
+def _safe_int_choice(val, allowed, default, label):
+    parsed = _safe_int(val, default)
+    if parsed in allowed:
+        return parsed
     if val not in (None, ""):
         print("[Hunyuan3D2mvGenerator] Invalid %s=%r, using default %r." % (label, val, default))
     return default
@@ -251,59 +265,79 @@ class Hunyuan3D2mvGenerator(BaseGenerator):
             pass
 
     def generate(self, image_bytes, params, progress_cb=None, cancel_event=None):
-        import torch
-
         params = params or {}
-        shape_params = self._parse_shape_params(params)
-        texture_params = self._parse_texture_params(params)
+        if self._active_node_id() == "texture-mesh":
+            return self._generate_texture(image_bytes, params, progress_cb, cancel_event)
+        return self._generate_shape(image_bytes, params, progress_cb, cancel_event)
 
-        guidance_scale = _safe_float(params.get("guidance_scale"), 5.0)
+    def _active_node_id(self):
+        model_id = str(os.environ.get("MODEL_ID") or "").strip()
+        if model_id:
+            node_id = model_id.rsplit("/", 1)[-1]
+            if node_id in {"generate-shape", "texture-mesh", "generate"}:
+                return "generate-shape" if node_id == "generate" else node_id
 
-        print(
-            "[Hunyuan3D2mvGenerator] Parsed params: variant=%s steps=%s octree=%s "
-            "guidance=%.2f chunks=%s box_v=%.3f mc_level=%.4f remove_bg=%s seed=%s include_texture=%s texture_variant=%s texture_input_mode=%s"
-            % (
-                shape_params["variant"],
-                shape_params["steps"],
-                shape_params["octree_res"],
-                guidance_scale,
-                shape_params["num_chunks"],
-                shape_params["box_v"],
-                shape_params["mc_level"],
-                shape_params["remove_bg"],
-                shape_params["seed"],
-                texture_params["include_texture"],
-                texture_params["texture_model_variant"],
-                texture_params["texture_input_mode"],
-            )
-        )
+        model_dir = str(os.environ.get("MODEL_DIR") or "").strip()
+        if model_dir:
+            basename = Path(model_dir).name
+            for node_id in ("generate-shape", "texture-mesh"):
+                if basename == node_id or basename.endswith("-" + node_id) or basename.endswith("_" + node_id):
+                    return node_id
 
-        self._report(progress_cb, 5, "Preprocessing front view...")
-        front_image = self._preprocess_bytes(image_bytes, remove_bg=shape_params["remove_bg"])
+        if self.model_dir is not None:
+            basename = self.model_dir.name
+            for node_id in ("generate-shape", "texture-mesh"):
+                if basename == node_id or basename.endswith("-" + node_id) or basename.endswith("_" + node_id):
+                    return node_id
+
+        return "generate-shape"
+
+    def _preprocess_reference_images(self, image_bytes, params, remove_bg, progress_cb, cancel_event, progress_points=None):
+        progress_points = progress_points or {"front": 5, "left": 10, "back": 14, "right": 18}
+        self._report(progress_cb, progress_points["front"], "Preprocessing reference front view...")
+        front_image = self._preprocess_bytes(image_bytes, remove_bg=remove_bg)
         self._check_cancelled(cancel_event)
 
         image_dict = {"front": front_image}
-        for view_name, pct in (("left", 10), ("back", 14), ("right", 18)):
-            image = self._optional_view_image(params, view_name, shape_params["remove_bg"])
+        for view_name in ("left", "back", "right"):
+            image = self._optional_view_image(params, view_name, remove_bg)
             if image is None:
                 continue
-            self._report(progress_cb, pct, "Preprocessing %s view..." % view_name)
+            self._report(progress_cb, progress_points.get(view_name, 10), "Preprocessing reference %s view..." % view_name)
             image_dict[view_name] = image
             self._check_cancelled(cancel_event)
 
-        print("[Hunyuan3D2mvGenerator] image_dict keys: %s" % list(image_dict.keys()))
+        print("[Hunyuan3D2mvGenerator] reference image keys: %s" % list(image_dict.keys()))
+        return image_dict
 
-        self._report(progress_cb, 22, "Loading model variant...")
+    def _generate_shape(self, image_bytes, params, progress_cb=None, cancel_event=None):
+        import torch
+
+        shape_params = self._parse_shape_params(params)
+        texture_params = self._parse_texture_params(params)
+        guidance_scale = _safe_float(params.get("guidance_scale"), 5.0)
+
+        print(
+            "[Hunyuan3D2mvGenerator] Shape params: variant=%s steps=%s octree=%s guidance=%.2f chunks=%s box_v=%.3f mc_level=%.4f remove_bg=%s seed=%s"
+            % (
+                shape_params["variant"], shape_params["steps"], shape_params["octree_res"], guidance_scale,
+                shape_params["num_chunks"], shape_params["box_v"], shape_params["mc_level"], shape_params["remove_bg"], shape_params["seed"],
+            )
+        )
+
+        image_dict = self._preprocess_reference_images(image_bytes, params, shape_params["remove_bg"], progress_cb, cancel_event)
+
+        self._report(progress_cb, 22, "Loading shape model variant...")
         self._load_variant(shape_params["variant"])
         self._check_cancelled(cancel_event)
 
-        self._report(progress_cb, 30, "Generating mesh...")
+        self._report(progress_cb, 30, "Generating shape mesh...")
         stop_evt = threading.Event()
         progress_thread = None
         if progress_cb:
             progress_thread = threading.Thread(
                 target=smooth_progress,
-                args=(progress_cb, 30, 92, "Generating mesh...", stop_evt),
+                args=(progress_cb, 30, 92, "Generating shape mesh...", stop_evt),
                 daemon=True,
             )
             progress_thread.start()
@@ -329,24 +363,96 @@ class Hunyuan3D2mvGenerator(BaseGenerator):
                 progress_thread.join(timeout=1.0)
 
         self._check_cancelled(cancel_event)
-
-        self._validate_mesh(mesh)
+        self._report(progress_cb, 94, "Validating shape mesh...")
+        self._validate_mesh(mesh, "Generated shape mesh")
 
         if texture_params["include_texture"]:
+            print(
+                "[Hunyuan3D2mvGenerator] Deprecated include_texture=true was supplied programmatically on generate-shape; prefer the texture-mesh node with a routed mesh input."
+            )
             probe = self._probe_texgen(texture_params["texture_model_variant"])
+            self._check_cancelled(cancel_event)
             if not probe["ok"]:
                 raise RuntimeError(self._format_texgen_probe_error(probe))
-            self._report(progress_cb, 94, "Texturing mesh...")
+            self._report(progress_cb, 95, "Texturing mesh via deprecated compatibility path...")
             texture_images = self._select_texture_images(image_dict, texture_params["texture_input_mode"])
             self._check_cancelled(cancel_event)
             paint_pipeline = self._load_paint_pipeline(probe)
             mesh = self._texture_mesh(mesh, texture_images, paint_pipeline, texture_params, probe)
-            self._validate_mesh(mesh)
+            self._check_cancelled(cancel_event)
+            self._validate_mesh(mesh, "Textured compatibility mesh")
 
-        self._report(progress_cb, 98, "Exporting mesh...")
+        self._report(progress_cb, 98, "Exporting shape GLB...")
+        self._check_cancelled(cancel_event)
         out_path = self._export_mesh(mesh)
 
-        self._report(progress_cb, 100, "Done")
+        self._report(progress_cb, 100, "Shape mesh done")
+        return str(out_path)
+
+    def _generate_texture(self, image_bytes, params, progress_cb=None, cancel_event=None):
+        texture_params = self._parse_texture_params(params)
+        print(
+            "[Hunyuan3D2mvGenerator] Texture params: texture_variant=%s texture_input_mode=%s remove_bg=%s texture_steps=%s render_size=%s texture_size=%s view_count=%s"
+            % (
+                texture_params["texture_model_variant"], texture_params["texture_input_mode"], texture_params["remove_bg"],
+                texture_params["texture_inference_steps"], texture_params["texture_render_size"], texture_params["texture_texture_size"],
+                texture_params["texture_view_count"],
+            )
+        )
+
+        self._report(progress_cb, 3, "Validating routed mesh input...")
+        mesh_path = self._resolve_mesh_path(params)
+        self._check_cancelled(cancel_event)
+
+        self._report(progress_cb, 8, "Loading routed mesh...")
+        mesh = self._load_mesh(mesh_path)
+        self._validate_mesh(mesh, "Routed texture source mesh")
+        self._check_cancelled(cancel_event)
+
+        image_dict = self._preprocess_reference_images(
+            image_bytes,
+            params,
+            texture_params["remove_bg"],
+            progress_cb,
+            cancel_event,
+            {"front": 15, "left": 20, "back": 24, "right": 28},
+        )
+        texture_images = self._select_texture_images(image_dict, texture_params["texture_input_mode"])
+        self._check_cancelled(cancel_event)
+
+        self._report(progress_cb, 35, "Checking texture runtime and assets...")
+        probe = self._probe_texgen(texture_params["texture_model_variant"])
+        self._check_cancelled(cancel_event)
+        if not probe["ok"]:
+            raise RuntimeError("Texture Mesh cannot start because texture runtime/assets are unavailable.\n%s" % self._format_texgen_probe_error(probe))
+
+        paint_pipeline = self._load_paint_pipeline(probe)
+        self._check_cancelled(cancel_event)
+
+        self._report(progress_cb, 45, "Texturing routed mesh...")
+        stop_evt = threading.Event()
+        progress_thread = None
+        if progress_cb:
+            progress_thread = threading.Thread(
+                target=smooth_progress,
+                args=(progress_cb, 45, 94, "Texturing routed mesh...", stop_evt),
+                daemon=True,
+            )
+            progress_thread.start()
+        try:
+            mesh = self._texture_mesh(mesh, texture_images, paint_pipeline, texture_params, probe)
+        finally:
+            stop_evt.set()
+            if progress_thread:
+                progress_thread.join(timeout=1.0)
+
+        self._check_cancelled(cancel_event)
+        self._validate_mesh(mesh, "Textured routed mesh")
+
+        self._report(progress_cb, 98, "Exporting textured GLB...")
+        self._check_cancelled(cancel_event)
+        out_path = self._export_mesh(mesh)
+        self._report(progress_cb, 100, "Texture mesh done")
         return str(out_path)
 
     def _parse_shape_params(self, params):
@@ -364,6 +470,7 @@ class Hunyuan3D2mvGenerator(BaseGenerator):
     def _parse_texture_params(self, params):
         return {
             "include_texture": _safe_bool(params.get("include_texture"), False),
+            "remove_bg": _safe_bool(params.get("remove_bg"), True),
             "texture_model_variant": _safe_choice(
                 params.get("texture_model_variant"),
                 set(_TEXTURE_VARIANTS.keys()),
@@ -376,7 +483,96 @@ class Hunyuan3D2mvGenerator(BaseGenerator):
                 "front",
                 "texture_input_mode",
             ),
+            "texture_inference_steps": _safe_int_choice(
+                params.get("texture_inference_steps"),
+                _TEXTURE_INFERENCE_STEP_OPTIONS,
+                30,
+                "texture_inference_steps",
+            ),
+            "texture_render_size": _safe_int_choice(
+                params.get("texture_render_size"),
+                _TEXTURE_SIZE_OPTIONS,
+                2048,
+                "texture_render_size",
+            ),
+            "texture_texture_size": _safe_int_choice(
+                params.get("texture_texture_size"),
+                _TEXTURE_SIZE_OPTIONS,
+                2048,
+                "texture_texture_size",
+            ),
+            "texture_view_count": _safe_int_choice(
+                params.get("texture_view_count"),
+                _TEXTURE_VIEW_COUNT_OPTIONS,
+                6,
+                "texture_view_count",
+            ),
         }
+
+    def _resolve_mesh_path(self, params):
+        raw_mesh_path = params.get("mesh_path")
+        if raw_mesh_path in (None, ""):
+            raw_mesh_path = params.get("mesh")
+
+        if raw_mesh_path in (None, ""):
+            raise RuntimeError(
+                "Texture Mesh requires a routed mesh input. Connect a mesh edge to the required mesh port so Modly injects params.mesh_path."
+            )
+        if not isinstance(raw_mesh_path, str):
+            raise RuntimeError("Texture Mesh routed mesh input must be a filesystem path string in params.mesh_path.")
+
+        mesh_path_text = raw_mesh_path.strip()
+        if not mesh_path_text:
+            raise RuntimeError(
+                "Texture Mesh received an empty routed mesh input. Connect a valid mesh edge so params.mesh_path is populated."
+            )
+
+        candidates = []
+        raw_path = Path(mesh_path_text)
+        workspace_dir = self.outputs_dir.parent
+        if mesh_path_text.startswith("/workspace/"):
+            candidates.append(workspace_dir / mesh_path_text[len("/workspace/"):])
+        elif raw_path.is_absolute():
+            candidates.append(raw_path)
+        else:
+            candidates.append(workspace_dir / raw_path)
+            candidates.append(raw_path)
+
+        supported = ", ".join(sorted(_SUPPORTED_MESH_EXTENSIONS))
+        extension_candidates = [path for path in candidates if path.suffix.lower() in _SUPPORTED_MESH_EXTENSIONS]
+        if not extension_candidates:
+            raise RuntimeError(
+                "Texture Mesh routed mesh input must point to a supported mesh file (%s): %s" % (supported, mesh_path_text)
+            )
+
+        searched = []
+        for candidate in extension_candidates:
+            searched.append(str(candidate))
+            if candidate.is_file() and os.access(str(candidate), os.R_OK):
+                return candidate.resolve()
+
+        raise RuntimeError(
+            "Texture Mesh routed mesh input is missing or unreadable. params.mesh_path=%r. Searched: %s"
+            % (mesh_path_text, "; ".join(searched))
+        )
+
+    def _load_mesh(self, mesh_path):
+        try:
+            import trimesh
+        except Exception as exc:
+            raise RuntimeError("Texture Mesh cannot load the routed mesh because trimesh is unavailable: %s" % exc)
+
+        try:
+            mesh = trimesh.load(str(mesh_path), force="mesh")
+        except Exception as exc:
+            raise RuntimeError("Texture Mesh could not load routed mesh %s: %s" % (mesh_path, exc))
+
+        if hasattr(trimesh, "Scene") and isinstance(mesh, trimesh.Scene):
+            try:
+                mesh = mesh.dump(concatenate=True)
+            except Exception as exc:
+                raise RuntimeError("Texture Mesh could not convert routed scene to a mesh from %s: %s" % (mesh_path, exc))
+        return mesh
 
     def _texgen_root(self):
         return self.model_dir / _TEXGEN_ROOT_DIRNAME
@@ -695,6 +891,34 @@ class Hunyuan3D2mvGenerator(BaseGenerator):
         pipeline_text = pipeline_src.read_text(encoding="utf-8")
         pipeline_text = pipeline_text.replace("from .unet.modules import", "from .modules import")
         pipeline_text = pipeline_text.replace(
+            "from diffusers.pipelines.stable_diffusion.pipeline_stable_diffusion import StableDiffusionPipeline, \\\n    retrieve_timesteps, rescale_noise_cfg",
+            "from diffusers.pipelines.stable_diffusion.pipeline_stable_diffusion import StableDiffusionPipeline, \\\n    retrieve_timesteps as _diffusers_retrieve_timesteps, rescale_noise_cfg\n"
+            "\n"
+            "def retrieve_timesteps(scheduler, num_inference_steps=None, device=None, timesteps=None, sigmas=None, **kwargs):\n"
+            "    import inspect\n"
+            "\n"
+            "    params = inspect.signature(_diffusers_retrieve_timesteps).parameters\n"
+            "    accepts_kwargs = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values())\n"
+            "    call_kwargs = {}\n"
+            "    if 'num_inference_steps' in params:\n"
+            "        call_kwargs['num_inference_steps'] = num_inference_steps\n"
+            "    if 'device' in params:\n"
+            "        call_kwargs['device'] = device\n"
+            "    if timesteps is not None and ('timesteps' in params or accepts_kwargs):\n"
+            "        call_kwargs['timesteps'] = timesteps\n"
+            "    if sigmas is not None and ('sigmas' in params or accepts_kwargs):\n"
+            "        call_kwargs['sigmas'] = sigmas\n"
+            "    call_kwargs.update(kwargs)\n"
+            "\n"
+            "    try:\n"
+            "        return _diffusers_retrieve_timesteps(scheduler, **call_kwargs)\n"
+            "    except TypeError:\n"
+            "        if 'sigmas' not in call_kwargs:\n"
+            "            raise\n"
+            "        call_kwargs.pop('sigmas', None)\n"
+            "        return _diffusers_retrieve_timesteps(scheduler, **call_kwargs)",
+        )
+        pipeline_text = pipeline_text.replace(
             "from diffusers.callbacks import MultiPipelineCallbacks, PipelineCallback",
             "try:\n"
             "    from diffusers.callbacks import MultiPipelineCallbacks, PipelineCallback\n"
@@ -883,7 +1107,137 @@ class Hunyuan3D2mvGenerator(BaseGenerator):
 
         return ordered_views
 
+    def _apply_texture_controls(self, paint_pipeline, texture_params):
+        config = getattr(paint_pipeline, "config", None)
+        if config is None:
+            if texture_params["texture_render_size"] != 2048 or texture_params["texture_texture_size"] != 2048 or texture_params["texture_view_count"] != 6:
+                raise RuntimeError(
+                    "Non-default texture size/view controls were requested, but this Hunyuan3DPaintPipeline has no config object to mutate. Use default size/view controls or update the texture runtime."
+                )
+            print("[Hunyuan3D2mvGenerator] Hunyuan3DPaintPipeline has no config object; texture size controls cannot be applied.")
+        else:
+            setattr(config, "render_size", texture_params["texture_render_size"])
+            setattr(config, "texture_size", texture_params["texture_texture_size"])
+            self._apply_texture_view_count(config, texture_params["texture_view_count"])
+
+        step_patch_status = self._apply_texture_inference_steps(paint_pipeline, texture_params["texture_inference_steps"])
+        effective_render_size = getattr(config, "render_size", texture_params["texture_render_size"]) if config is not None else texture_params["texture_render_size"]
+        effective_texture_size = getattr(config, "texture_size", texture_params["texture_texture_size"]) if config is not None else texture_params["texture_texture_size"]
+        print(
+            "[Hunyuan3D2mvGenerator] Effective texture controls: variant=%s mode=%s steps=%s render_size=%s texture_size=%s view_count=%s step_override=%s"
+            % (
+                texture_params["texture_model_variant"],
+                texture_params["texture_input_mode"],
+                texture_params["texture_inference_steps"],
+                effective_render_size,
+                effective_texture_size,
+                texture_params["texture_view_count"],
+                step_patch_status,
+            )
+        )
+
+    def _apply_texture_view_count(self, config, view_count):
+        if view_count == 6:
+            return
+
+        candidate_attrs = (
+            "candidate_camera_azims",
+            "candidate_camera_elevs",
+            "camera_azims",
+            "camera_elevs",
+            "render_camera_azims",
+            "render_camera_elevs",
+            "view_azims",
+            "view_elevs",
+            "view_weights",
+            "view_ids",
+            "view_names",
+        )
+        mutated = []
+        for attr in candidate_attrs:
+            value = getattr(config, attr, None)
+            if isinstance(value, (list, tuple)) and len(value) >= view_count:
+                setattr(config, attr, list(value[:view_count]))
+                mutated.append(attr)
+
+        if not mutated:
+            raise RuntimeError(
+                "Texture view_count=%s was requested, but this Hunyuan3DPaintPipeline config does not expose supported mutable camera/view lists. Use view_count=6 or update the texture runtime."
+                % view_count
+            )
+        print("[Hunyuan3D2mvGenerator] Applied texture view_count=%s to config attrs: %s" % (view_count, ", ".join(mutated)))
+
+    def _apply_texture_inference_steps(self, paint_pipeline, steps):
+        setattr(paint_pipeline, "_hunyuan3d2mv_texture_inference_steps", steps)
+        try:
+            from hy3dgen.texgen.utils import multiview_utils
+        except Exception as exc:
+            if steps != 30:
+                raise RuntimeError("Unable to apply texture_inference_steps=%s because multiview_utils could not be imported: %s" % (steps, exc))
+            return "default-30-no-multiview-import"
+
+        setattr(multiview_utils, "_hunyuan3d2mv_texture_inference_steps", steps)
+        net_cls = getattr(multiview_utils, "Multiview_Diffusion_Net", None)
+        if net_cls is None or not hasattr(net_cls, "__call__"):
+            if steps != 30:
+                raise RuntimeError("Unable to apply texture_inference_steps=%s because Multiview_Diffusion_Net.__call__ was not found." % steps)
+            return "default-30-no-call-patch"
+
+        if getattr(net_cls, "_hunyuan3d2mv_steps_patch", False):
+            try:
+                net_cls.__call__.__globals__["_hunyuan3d2mv_texture_inference_steps"] = steps
+            except Exception:
+                pass
+            return "patched-call"
+
+        original_call = net_cls.__call__
+        try:
+            import inspect
+
+            source = textwrap.dedent(inspect.getsource(original_call))
+        except Exception as exc:
+            if steps != 30:
+                raise RuntimeError("Unable to apply texture_inference_steps=%s because Multiview_Diffusion_Net.__call__ source is unavailable: %s" % (steps, exc))
+            return "default-30-source-unavailable"
+
+        patched = source.replace(
+            "num_inference_steps=30",
+            "num_inference_steps=getattr(self, '_hunyuan3d2mv_texture_inference_steps', _hunyuan3d2mv_texture_inference_steps)",
+        ).replace(
+            "num_inference_steps = 30",
+            "num_inference_steps = getattr(self, '_hunyuan3d2mv_texture_inference_steps', _hunyuan3d2mv_texture_inference_steps)",
+        )
+        if patched == source:
+            if steps != 30:
+                raise RuntimeError("Unable to apply texture_inference_steps=%s because the expected upstream hardcoded 30 was not found." % steps)
+            return "default-30-hardcode-not-found"
+
+        namespace = original_call.__globals__
+        namespace["_hunyuan3d2mv_texture_inference_steps"] = steps
+        try:
+            exec(compile(patched, getattr(original_call, "__code__", None).co_filename if hasattr(original_call, "__code__") else "<hunyuan3d2mv_texture_steps_patch>", "exec"), namespace)
+        except Exception as exc:
+            if steps != 30:
+                raise RuntimeError("Unable to compile texture inference step override for steps=%s: %s" % (steps, exc))
+            return "default-30-patch-compile-failed"
+
+        patched_call = namespace.get("__call__")
+        if patched_call is None:
+            if steps != 30:
+                raise RuntimeError("Unable to apply texture_inference_steps=%s because patched __call__ was not produced." % steps)
+            return "default-30-patched-call-missing"
+
+        net_cls.__call__ = patched_call
+        net_cls._hunyuan3d2mv_original_call = original_call
+        net_cls._hunyuan3d2mv_steps_patch = True
+        print("[Hunyuan3D2mvGenerator] Patched Multiview_Diffusion_Net.__call__ to honor texture_inference_steps.")
+        return "patched-call"
+
     def _texture_mesh(self, mesh, texture_images, paint_pipeline, texture_params, probe):
+        import inspect
+
+        self._apply_texture_controls(paint_pipeline, texture_params)
+
         call_candidates = []
         if hasattr(paint_pipeline, "paint"):
             call_candidates.append(("paint", paint_pipeline.paint))
@@ -897,8 +1251,20 @@ class Hunyuan3D2mvGenerator(BaseGenerator):
 
         errors = []
         for method_name, method in call_candidates:
+            try:
+                signature = inspect.signature(method)
+                parameters = signature.parameters
+                accepts_kwargs = any(param.kind == inspect.Parameter.VAR_KEYWORD for param in parameters.values())
+            except (TypeError, ValueError):
+                parameters = {}
+                accepts_kwargs = True
+
             for kwargs in kwargs_candidates:
                 candidate_kwargs = dict(kwargs)
+                if not accepts_kwargs:
+                    unsupported_keys = [key for key in candidate_kwargs if key not in parameters]
+                    if unsupported_keys:
+                        continue
                 if method_name == "paint" and "image" in candidate_kwargs and len(texture_images) > 1:
                     continue
                 try:
@@ -914,7 +1280,7 @@ class Hunyuan3D2mvGenerator(BaseGenerator):
                 except Exception as exc:
                     errors.append("%s(%s): %s" % (method_name, ",".join(sorted(candidate_kwargs.keys())), exc))
 
-        raise RuntimeError("Texgen execution failed after shape generation. Details: %s" % " | ".join(errors))
+        raise RuntimeError("Texgen execution failed during texture generation. Details: %s" % " | ".join(errors))
 
     def _extract_textured_mesh(self, result):
         if result is None:
@@ -925,15 +1291,15 @@ class Hunyuan3D2mvGenerator(BaseGenerator):
             return result.mesh
         return result
 
-    def _validate_mesh(self, mesh):
+    def _validate_mesh(self, mesh, label="Generated mesh"):
         if mesh is None:
-            raise RuntimeError("Generated mesh is None")
+            raise RuntimeError("%s is None" % label)
         if not hasattr(mesh, "vertices") or mesh.vertices is None or len(mesh.vertices) == 0:
-            raise RuntimeError("Generated mesh has no vertices")
+            raise RuntimeError("%s has no vertices" % label)
         if not hasattr(mesh, "faces") or mesh.faces is None or len(mesh.faces) == 0:
-            raise RuntimeError("Generated mesh has no faces")
+            raise RuntimeError("%s has no faces" % label)
 
-        print("[Hunyuan3D2mvGenerator] Mesh validated: %d vertices, %d faces" % (len(mesh.vertices), len(mesh.faces)))
+        print("[Hunyuan3D2mvGenerator] %s validated: %d vertices, %d faces" % (label, len(mesh.vertices), len(mesh.faces)))
 
     def _export_mesh(self, mesh):
         self.outputs_dir.mkdir(parents=True, exist_ok=True)
